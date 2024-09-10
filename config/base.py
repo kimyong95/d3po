@@ -7,16 +7,15 @@ def get_config():
     ############ General ############
     # run name for wandb logging and checkpoint saving -- if not provided, will be auto-generated based on the datetime.
     config.run_name = ""
+    config.name_subfix = ""
     # random seed for reproducibility.
     config.seed = 0
     # top-level logging directory for checkpoint saving.
     config.logdir = "logs"
     # number of epochs to train for. each epoch is one round of sampling from the model followed by training on those samples.
-    config.num_epochs = 400
+    config.num_epochs = 200
     # number of epochs between saving model checkpoints.
-    config.save_freq = 400
-    # number of checkpoints to keep before overwriting old ones.
-    config.num_checkpoint_limit = 10
+    config.save_freq = 10
     # mixed precision training. options are "fp16", "bf16", and "no". half-precision speeds up training significantly.
     config.mixed_precision = "fp16"
     # allow tf32 on Ampere GPUs, which can speed up training.
@@ -30,42 +29,38 @@ def get_config():
     # about 10GB of GPU memory. beware that if LoRA is disabled, training will take a lot of memory and saved checkpoint
     # files will also be large.
     config.use_lora = True
-    # whether or not to use xFormers to reduce memory usage.
-    config.use_xformers = False
+    config.wandb_mode = "online"
 
     ############ Pretrained Model ############
-    config.pretrained = pretrained = ml_collections.ConfigDict()
-    # base model to load. either a path to a local directory, or a model name from the HuggingFace model hub.
-    # pretrained.model = "stablediffusionapi/anything-v5"
-    pretrained.model = "runwayml/stable-diffusion-v1-5"
-    # revision of the model to load.
-    pretrained.revision = "main"
+    config.sd_model = "sdxl"
 
     ############ Sampling ############
     config.sample = sample = ml_collections.ConfigDict()
-    # number of sampler inference steps.
-    sample.num_steps = 20
     # eta parameter for the DDIM sampler. this controls the amount of noise injected into the sampling process, with 0.0
     # being fully deterministic and 1.0 being equivalent to the DDPM sampler.
     sample.eta = 1.0
-    # classifier-free guidance weight. 1.0 is no guidance.
-    sample.guidance_scale = 5.0
-    # batch size (per GPU!) to use for sampling.
-    sample.batch_size = 10
-    # number of batches to sample per epoch. the total number of samples per epoch is `num_batches_per_epoch *
-    # batch_size * num_gpus`.
-    sample.num_batches_per_epoch = 2
     # save interval
     sample.save_interval = 100
     # eval batch_size
-    sample.eval_batch_size = 10
+    sample.eval_batch_size = 16
     # eval epoch
-    sample.eval_epoch = 10
+    sample.eval_epoch = 5
+    # batch size (per GPU!) to use for sampling.
+    sample.batch_size = 32
+    # number of batches to sample per epoch.
+    sample.num_batches_per_epoch = 1
+    # the total number of samples per epoch is `num_batches_per_epoch * batch_size * num_gpus`.
 
     ############ Training ############
     config.train = train = ml_collections.ConfigDict()
     # batch size (per GPU!) to use for training.
-    train.batch_size = 1
+    train.batch_size = 4
+    # number of gradient accumulation steps.
+    train.gradient_accumulation_steps = 1
+    # the effective batch size is `batch_size * num_gpus * gradient_accumulation_steps`.
+    # effective batch size: 2*2 = 4
+    # gradient updates per epoch: 32 / 4 = 8
+
     # whether to use the 8bit Adam optimizer from bitsandbytes.
     train.use_8bit_adam = False
     # learning rate.
@@ -78,9 +73,7 @@ def get_config():
     train.adam_weight_decay = 1e-4
     # Adam epsilon.
     train.adam_epsilon = 1e-8
-    # number of gradient accumulation steps. the effective batch size is `batch_size * num_gpus *
-    # gradient_accumulation_steps`.
-    train.gradient_accumulation_steps = 1
+
     # maximum gradient norm for gradient clipping.
     train.max_grad_norm = 1.0
     # number of inner epochs per outer epoch. each inner epoch is one iteration through the data collected during one
@@ -128,9 +121,10 @@ def get_config():
 
     ############ Prompt Function ############
     # prompt function to use. see `prompts.py` for available prompt functisons.
-    config.prompt_fn = "simple_animals"
+    config.prompt_fn = "fixed"
     # kwargs to pass to the prompt function.
-    config.prompt_fn_kwargs = {}
+    config.prompt_fn_kwargs = { }
+    config.fixed_prompt = "A helicopter floating under the ocean."
     
 
     ############ Reward Function ############
@@ -138,7 +132,10 @@ def get_config():
     # if the reward_fn is "jpeg_compressibility" or "jpeg_incompressibility", using the default config can reproduce our results.
     # if the reward_fn is "aesthetic_score" and you want to reproduce our results, 
     # set config.num_epochs = 1000, sample.num_batches_per_epoch=1, sample.batch_size=8 and sample.eval_batch_size=8
-    config.reward_fn = "jpeg_compressibility"
+    config.reward_fn = "gemini"
 
+    ############ D3PO Specific ############
+    # config.reward_fn_2 = ""
+    config.reward_fn_choice = "gemini_choice"
 
     return config

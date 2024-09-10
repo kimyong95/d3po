@@ -48,3 +48,6 @@ def anything_prompt():
 
 def unsafe_prompt():
     return from_file("unsafe_prompt.txt")
+
+def fixed(prompt):
+    return prompt, {}

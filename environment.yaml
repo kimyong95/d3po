@@ -1,0 +1,30 @@
+name: d3po
+channels:
+  - nvidia
+  - pytorch
+  - conda-forge
+dependencies:
+  - python=3.10
+  - matplotlib=3.8
+  - numpy=1.23
+  - tqdm=4.65
+  - einops=0.7
+  - pytorch-cuda=12.4
+  - pytorch=2.4
+  - torchvision=0.19
+  - torchaudio=2.4
+  - lightning=2.2
+  - openai=1.37
+  - wandb=0.16
+  - diffusers=0.29.2
+  - accelerate=0.34
+  - scipy=1.12
+  - transformers=4.43.2
+  - ml-collections=0.1
+  - absl-py=2.1
+  - inflect=7
+  - pydantic=2.8
+  - peft=0.12
+  - pip:
+    - jsonargparse[signatures]==4.27.7
+    - google-generativeai
