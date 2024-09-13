@@ -7,7 +7,8 @@
 from typing import Any, Callable, Dict, List, Optional, Union
 
 import torch
-
+import random
+import torch.utils.checkpoint as checkpoint
 from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import (
     StableDiffusionPipeline,
     rescale_noise_cfg,
@@ -63,8 +64,10 @@ def pipeline_with_logprob(
     ] = None,
     callback_on_step_end_tensor_inputs: List[str] = ["latents"],
     # ↓↓↓↓↓↓↓↓↓↓ edited ↓↓↓↓↓↓↓↓↓↓ #
-    given_trajectory: Optional[List[torch.Tensor]] = None,
+    log_probs_given_trajectory: Optional[List[torch.Tensor]] = None,
     enable_grad: bool = False,
+    enable_grad_checkpointing: bool = False,
+    truncated_backprop_at: Optional[dict] = None,
     # ↑↑↑↑↑↑↑↑↑↑ edited ↑↑↑↑↑↑↑↑↑↑ #
     **kwargs,
 ):
@@ -397,6 +400,7 @@ def pipeline_with_logprob(
     # ↓↓↓↓↓↓↓↓↓↓ edited ↓↓↓↓↓↓↓↓↓↓ #
     all_latents = [latents]
     all_log_probs = []
+    all_prev_sample_means = []
     # ↑↑↑↑↑↑↑↑↑↑ edited ↑↑↑↑↑↑↑↑↑↑ #
     self._num_timesteps = len(timesteps)
     with self.progress_bar(total=num_inference_steps) as progress_bar, torch.set_grad_enabled(enable_grad): # <- edited
@@ -414,16 +418,37 @@ def pipeline_with_logprob(
             if ip_adapter_image is not None or ip_adapter_image_embeds is not None:
                 added_cond_kwargs["image_embeds"] = image_embeds
             
-            
-            noise_pred = self.unet(
-                latent_model_input,
-                t,
-                encoder_hidden_states=prompt_embeds,
-                timestep_cond=timestep_cond,
-                cross_attention_kwargs=self.cross_attention_kwargs,
-                added_cond_kwargs=added_cond_kwargs,
-                return_dict=False,
-            )[0]
+            # predict the noise residual
+            # ↓↓↓↓↓↓↓↓↓↓ edited ↓↓↓↓↓↓↓↓↓↓ #
+            if enable_grad_checkpointing:
+                noise_pred = checkpoint.checkpoint(
+                    self.unet,
+                    latent_model_input,
+                    t,
+                    encoder_hidden_states=prompt_embeds,
+                    timestep_cond=timestep_cond,
+                    cross_attention_kwargs=self.cross_attention_kwargs,
+                    added_cond_kwargs=added_cond_kwargs,
+                    return_dict=False,
+                    use_reentrant=False
+                )[0]
+            else:
+            # ↑↑↑↑↑↑↑↑↑↑ edited ↑↑↑↑↑↑↑↑↑↑ #
+                noise_pred = self.unet(
+                    latent_model_input,
+                    t,
+                    encoder_hidden_states=prompt_embeds,
+                    timestep_cond=timestep_cond,
+                    cross_attention_kwargs=self.cross_attention_kwargs,
+                    added_cond_kwargs=added_cond_kwargs,
+                    return_dict=False,
+                )[0]
+
+            # ↓↓↓↓↓↓↓↓↓↓ edited ↓↓↓↓↓↓↓↓↓↓ #
+            if truncated_backprop_at is not None and i in truncated_backprop_at:
+                assert noise_pred.requires_grad
+                noise_pred = noise_pred.detach()
+            # ↑↑↑↑↑↑↑↑↑↑ edited ↑↑↑↑↑↑↑↑↑↑ #
 
             # perform guidance
             if self.do_classifier_free_guidance:
@@ -437,8 +462,8 @@ def pipeline_with_logprob(
             # compute the previous noisy sample x_t -> x_t-1
             latents_dtype = latents.dtype
             # ↓↓↓↓↓↓↓↓↓↓ edited ↓↓↓↓↓↓↓↓↓↓ #
-            given_prev_sample = given_trajectory[:,i] if given_trajectory is not None else None
-            latents, log_prob = ddim_step_with_logprob(self.scheduler, noise_pred, t, latents, **extra_step_kwargs, return_dict=False, given_prev_sample=given_prev_sample)
+            log_prob_given_prev_sample = log_probs_given_trajectory[:,i] if log_probs_given_trajectory is not None else None
+            latents, prev_sample_mean, log_prob = ddim_step_with_logprob(self.scheduler, noise_pred, t, latents, **extra_step_kwargs, return_dict=False, log_prob_given_prev_sample=log_prob_given_prev_sample)
             # ↑↑↑↑↑↑↑↑↑↑ edited ↑↑↑↑↑↑↑↑↑↑ #
             if latents.dtype != latents_dtype:
                 if torch.backends.mps.is_available():
@@ -447,6 +472,7 @@ def pipeline_with_logprob(
             # ↓↓↓↓↓↓↓↓↓↓ edited ↓↓↓↓↓↓↓↓↓↓ #
             all_latents.append(latents)
             all_log_probs.append(log_prob)
+            all_prev_sample_means.append(prev_sample_mean)
             # ↑↑↑↑↑↑↑↑↑↑ edited ↑↑↑↑↑↑↑↑↑↑ #
 
             if callback_on_step_end is not None:
@@ -519,7 +545,7 @@ def pipeline_with_logprob(
     self.maybe_free_model_hooks()
 
     if not return_dict:
-        return (image, all_latents, all_log_probs)
+        return (image, all_latents, all_log_probs, all_prev_sample_means)
 
     return StableDiffusionXLPipelineOutput(images=image)
 ######################### copy from parent #########################

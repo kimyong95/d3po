@@ -316,7 +316,7 @@ def main(_):
 
             # sample
             with autocast():
-                images, latents, log_probs = pipeline_with_logprob(
+                images, latents, log_probs, _ = pipeline_with_logprob(
                     pipeline,
                     prompt=prompts,
                     num_inference_steps=num_steps,
@@ -405,8 +405,8 @@ def main(_):
             ):  
                 sample["latents"].requires_grad = False
                 unet = pipeline.unet
-                pipeline.unet = ref_unet # warning: not thread-safe
-                _, _, ref_log_probs = pipeline_with_logprob(
+                pipeline.unet = ref_unet # warning: not multithread-safe
+                _, _, ref_log_probs, _ = pipeline_with_logprob(
                     pipeline,
                     prompt=prompts,
                     latents=sample["latents"][:, 0], # x0
@@ -416,7 +416,7 @@ def main(_):
                     output_type="pt",
                     return_dict=False,
                     callback_on_step_end=lambda self, index, timestep, kwargs: { "latents": sample["next_latents"][:, index] },
-                    given_trajectory=sample["next_latents"], # x1, ..., xT
+                    log_prob_given_prev_sample=sample["next_latents"], # x1, ..., xT
                     enable_grad=False,
                 )
                 
@@ -478,7 +478,7 @@ def main(_):
                         "latents": sample["next_latents"][:, index]
                     }
 
-                images, latents, log_probs = pipeline_with_logprob(
+                images, latents, log_probs, _ = pipeline_with_logprob(
                     pipeline,
                     prompt=prompts,
                     latents=sample["latents"][:, 0], # x0
@@ -489,7 +489,7 @@ def main(_):
                     return_dict=False,
                     callback_on_step_end=callback_func,
                     callback_on_step_end_tensor_inputs=["log_prob"],
-                    given_trajectory=sample["next_latents"], # x1, ..., xT
+                    log_probs_given_trajectory=sample["next_latents"], # x1, ..., xT
                     enable_grad=True,
                 )
             # make sure we did an optimization step at the end of the inner epoch
@@ -509,7 +509,7 @@ def main(_):
 
             # sample
             with autocast():
-                eval_images, _, _ = pipeline_with_logprob(
+                eval_images, _, _, _ = pipeline_with_logprob(
                     pipeline,
                     prompt=eval_prompts,
                     num_inference_steps=num_steps,
@@ -520,7 +520,7 @@ def main(_):
                     generator=eval_generator,
                 )
 
-            eval_rewards, eval_rewards_meta = reward_fn(eval_images, prompts, prompt_metadata)
+            eval_rewards, eval_rewards_meta = reward_fn(eval_images, eval_prompts, eval_prompt_metadata)
             eval_rewards = eval_rewards.cpu().numpy()
 
             # this is a hack to force wandb to log the images as JPEGs instead of PNGs

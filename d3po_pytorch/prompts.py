@@ -31,14 +31,11 @@ def from_file(path, low=None, high=None):
 def imagenet_all():
     return from_file("imagenet_classes.txt")
 
-
 def imagenet_animals():
     return from_file("imagenet_classes.txt", 0, 398)
 
-
 def imagenet_dogs():
     return from_file("imagenet_classes.txt", 151, 269)
-
 
 def simple_animals():
     return from_file("simple_animals.txt")

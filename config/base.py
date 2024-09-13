@@ -13,7 +13,7 @@ def get_config():
     # top-level logging directory for checkpoint saving.
     config.logdir = "logs"
     # number of epochs to train for. each epoch is one round of sampling from the model followed by training on those samples.
-    config.num_epochs = 200
+    config.num_epochs = 50
     # number of epochs between saving model checkpoints.
     config.save_freq = 10
     # mixed precision training. options are "fp16", "bf16", and "no". half-precision speeds up training significantly.

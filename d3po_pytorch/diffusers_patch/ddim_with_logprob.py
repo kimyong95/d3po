@@ -37,7 +37,7 @@ def ddim_step_with_logprob(
         variance_noise: Optional[torch.Tensor] = None,
         return_dict: bool = True,
         # ↓↓↓↓↓↓↓↓↓↓ edited ↓↓↓↓↓↓↓↓↓↓ #
-        given_prev_sample: Optional[torch.Tensor] = None,
+        log_prob_given_prev_sample: Optional[torch.Tensor] = None,
         # ↑↑↑↑↑↑↑↑↑↑ edited ↑↑↑↑↑↑↑↑↑↑ #
     ) -> Union[DDIMSchedulerOutput, Tuple]:
         """
@@ -156,13 +156,13 @@ def ddim_step_with_logprob(
             prev_sample = prev_sample_mean
         
         # use the given prev_sample
-        if given_prev_sample is not None:
-            prev_sample = given_prev_sample
-
-        log_prob = calculate_log_probs(prev_sample, prev_sample_mean, std_dev_t)
-
+        if log_prob_given_prev_sample is not None:
+            log_prob = calculate_log_probs(log_prob_given_prev_sample, prev_sample_mean, std_dev_t)
+        else:
+            log_prob = calculate_log_probs(prev_sample, prev_sample_mean, std_dev_t)
+        
         if not return_dict:
-            return (prev_sample.type(sample.dtype), log_prob)
+            return (prev_sample.type(sample.dtype), prev_sample_mean, log_prob)
         # ↑↑↑↑↑↑↑↑↑↑ edited ↑↑↑↑↑↑↑↑↑↑ #
 
         return DDIMSchedulerOutput(prev_sample=prev_sample, pred_original_sample=pred_original_sample)

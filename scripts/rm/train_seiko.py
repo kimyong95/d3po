@@ -4,6 +4,7 @@ import os
 import datetime
 from concurrent import futures
 import time
+import random
 from absl import app, flags
 from ml_collections import config_flags
 from accelerate import Accelerator
@@ -28,7 +29,8 @@ from peft import LoraConfig
 from peft.utils import get_peft_model_state_dict
 from huggingface_hub import hf_hub_download
 from safetensors.torch import load_file
-
+import copy
+from seiko.surrogate_model import SurrogateModel
 
 tqdm = partial(tqdm.tqdm, dynamic_ncols=True)
 
@@ -106,10 +108,10 @@ def main(_):
         # we always accumulate gradients across timesteps; we want config.train.gradient_accumulation_steps to be the
         # number of *samples* we accumulate across, so we need to multiply by the number of training timesteps to get
         # the total number of optimizer steps to accumulate across.
-        gradient_accumulation_steps=config.train.gradient_accumulation_steps * num_train_timesteps,
+        gradient_accumulation_steps=config.train.gradient_accumulation_steps,
     )
 
-    wandb_name = f"ddpo-{config.name_subfix}" if config.name_subfix else "ddpo"
+    wandb_name = f"seiko-{config.name_subfix}" if config.name_subfix else "seiko"
     if accelerator.is_main_process:
         accelerator.init_trackers(
             project_name="finetune-stable-diffusion",
@@ -148,10 +150,11 @@ def main(_):
 
     # Move unet, vae and text_encoder to device and cast to inference_dtype
     pipeline = pipeline.to(accelerator.device, dtype=inference_dtype)
+
     if config.use_lora:
         pipeline.unet.to(accelerator.device, dtype=inference_dtype)
+        
     if config.use_lora:
-
         unet_lora_config = LoraConfig(
             init_lora_weights="gaussian",
             target_modules=["to_k", "to_q", "to_v", "to_out.0"],
@@ -163,22 +166,26 @@ def main(_):
         for param in pipeline.unet.parameters():
             if param.requires_grad:
                 param.data = param.to(torch.float32)
-        unet = pipeline.unet
-        trainable_parameters = filter(lambda p: p.requires_grad, unet.parameters())
+        training_unet = pipeline.unet
+        trainable_parameters = filter(lambda p: p.requires_grad, training_unet.parameters())
     else:
         pipeline.unet.requires_grad_(True)
-        unet = pipeline.unet
+        training_unet = pipeline.unet
         trainable_parameters = unet.parameters()
+    
+    current_unet = copy.deepcopy(training_unet)
+    current_unet.requires_grad_(False)
 
     # set up diffusers-friendly checkpoint saving with Accelerate
 
     def save_model_hook(models, weights, output_dir):
-        assert len(models) == 1
+        # not saving the models[0] (surrogate model)
+        assert isinstance(models[-1], type(pipeline.unet))
         if config.use_lora:
-            state_dict = convert_state_dict_to_diffusers(get_peft_model_state_dict(models[0]))
+            state_dict = convert_state_dict_to_diffusers(get_peft_model_state_dict(models[-1]))
             pipeline.save_lora_weights(save_directory=output_dir, unet_lora_layers=state_dict)
         elif not config.use_lora:
-            models[0].save_pretrained(os.path.join(output_dir, "unet"))
+            models[-1].save_pretrained(os.path.join(output_dir, "unet"))
         weights.pop()  # ensures that accelerate doesn't try to handle saving of the model
 
     def load_model_hook(models, input_dir):
@@ -208,45 +215,18 @@ def main(_):
     if config.allow_tf32:
         torch.backends.cuda.matmul.allow_tf32 = True
 
-    # Initialize the optimizer
-    if config.train.use_8bit_adam:
-        try:
-            import bitsandbytes as bnb
-        except ImportError:
-            raise ImportError(
-                "Please install bitsandbytes to use 8-bit Adam. You can do so by running `pip install bitsandbytes`"
-            )
-
-        optimizer_cls = bnb.optim.AdamW8bit
-    else:
-        optimizer_cls = torch.optim.AdamW
-
-    optimizer = optimizer_cls(
-        trainable_parameters,
-        lr=config.train.learning_rate,
-        betas=(config.train.adam_beta1, config.train.adam_beta2),
-        weight_decay=config.train.adam_weight_decay,
-        eps=config.train.adam_epsilon,
-    )
-
     # prepare prompt and reward fn
     prompt_fn = getattr(d3po_pytorch.prompts, config.prompt_fn)
     reward_fn = getattr(d3po_pytorch.rewards, config.reward_fn)()
 
-    # initialize stat tracker
-    if config.per_prompt_stat_tracking:
-        stat_tracker = PerPromptStatTracker(
-            config.per_prompt_stat_tracking.buffer_size,
-            config.per_prompt_stat_tracking.min_count,
-        )
 
     # for some reason, autocast is necessary for non-lora training but for lora training it isn't necessary and it uses
     # more memory
     autocast = contextlib.nullcontext if config.use_lora else accelerator.autocast
 
-    # Prepare everything with our `accelerator`.
-    unet, optimizer = accelerator.prepare(unet, optimizer)
-
+    surrogate_model = SurrogateModel()
+    surrogate_model = surrogate_model.to(accelerator.device)
+    surrogate_model.model = accelerator.prepare(surrogate_model.model)
 
     # Train!
     samples_per_epoch = config.sample.batch_size * accelerator.num_processes * config.sample.num_batches_per_epoch
@@ -276,15 +256,23 @@ def main(_):
     else:
         first_epoch = 0
 
+    num_samples_per_outerloop = config.num_samples_per_outerloop
     global_step = 0
-    for epoch in range(first_epoch, config.num_epochs):
+    for outer_loop, num_samples in enumerate(num_samples_per_outerloop):
+
         #################### SAMPLING ####################
         pipeline.unet.eval()
-        samples = []
-        prompts_list = []
+
+        assert num_samples % config.sample.batch_size == 0
+        num_samples_batches = num_samples // config.sample.batch_size
+
+        all_images_tensor = []
+        all_prompts = []
+
+        # config.sample.num_batches_per_epoch is not used
         for i in tqdm(
-            range(config.sample.num_batches_per_epoch),
-            desc=f"Epoch {epoch}: sampling",
+            range(num_samples_batches),
+            desc="Obtain fresh samples and feedbacks",
             disable=not accelerator.is_local_main_process,
             position=0,
         ):
@@ -293,10 +281,11 @@ def main(_):
                 *[prompt_fn(**config.prompt_fn_kwargs) for _ in range(config.sample.batch_size)]
             )
             prompts = list(prompts)
+            all_prompts.extend(prompts)
 
             # sample
             with autocast():
-                images, latents, log_probs, _ = pipeline_with_logprob(
+                images_tensor, latents, log_probs, _ = pipeline_with_logprob(
                     pipeline,
                     prompt=prompts,
                     num_inference_steps=num_steps,
@@ -306,211 +295,203 @@ def main(_):
                     return_dict=False,
                 )
 
-            latents = torch.stack(latents, dim=1)  # (batch_size, num_steps + 1, 4, 128, 128)
-            log_probs = torch.stack(log_probs, dim=1)  # (batch_size, num_steps, 1)
-            timesteps = pipeline.scheduler.timesteps.repeat(config.sample.batch_size, 1)  # (batch_size, num_steps)
-
-            rewards = reward_fn(images, prompts, prompt_metadata)
-
-            samples.append(
-                {
-                    "timesteps": timesteps,
-                    "latents": latents[:, :-1],  # each entry is the latent before timestep t
-                    "next_latents": latents[:, 1:],  # each entry is the latent after timestep t
-                    "log_probs": log_probs,
-                    "rewards": rewards,
-                }
-            )
-            prompts_list.extend(prompts)
-
-        # wait for all rewards to be computed
-        for sample in tqdm(
-            samples,
-            desc="Waiting for rewards",
-            disable=not accelerator.is_local_main_process,
-            position=0,
-        ):
-            rewards, reward_metadata = sample["rewards"]
-            # accelerator.print(reward_metadata)
-            sample["rewards"] = torch.as_tensor(rewards, device=accelerator.device)
-
-        # collate samples into dict where each entry has shape (num_batches_per_epoch * sample.batch_size, ...)
-        samples = {k: torch.cat([s[k] for s in samples]) for k in samples[0].keys()}
+            all_images_tensor.append(images_tensor)
         
-        # gather rewards across processes
-        rewards = accelerator.gather(samples["rewards"]).cpu().numpy()
+        all_images_tensor = torch.cat(all_images_tensor, dim=0)
 
-        # log rewards and images
-        accelerator.log(
-            {
-                "epoch": epoch,
-                "train/reward_mean": rewards.mean(),
-            },
-            step=global_step,
+        assert(len(all_images_tensor) == num_samples), "Number of fresh online samples does not match the target number" 
+
+        ##### Generate a feedback y(i) = r(x(i)) + ε, (we set ε = 0)
+        scores, outputs = reward_fn(all_images_tensor, all_prompts, [{}]*num_samples)
+
+        ##### Construct a new dataset: D(i) = D(i−1) + (x(i), y(i))
+        surrogate_model.update(all_images_tensor.type(torch.float32), scores)
+
+        del all_images_tensor
+
+        ##### Update a diffusion model as {p(i)} by finetuning.
+        optimizer = torch.optim.AdamW(
+            training_unet.parameters(),
+            lr=config.train.learning_rate,
+            betas=(config.train.adam_beta1, config.train.adam_beta2),
+            weight_decay=config.train.adam_weight_decay,
+            eps=config.train.adam_epsilon,
         )
 
-        # per-prompt mean/std tracking
-        if config.per_prompt_stat_tracking:
-            advantages = stat_tracker.update(prompts_list, rewards)
-        else:
-            advantages = (rewards - rewards.mean()) / (rewards.std() + 1e-8)
-
-        # ungather advantages; we only need to keep the entries corresponding to the samples on this process
-        samples["advantages"] = (
-            torch.as_tensor(advantages)
-            .reshape(accelerator.num_processes, -1)[accelerator.process_index]
-            .to(accelerator.device)
-        )
-
-        del samples["rewards"]
-
-        total_batch_size, num_timesteps = samples["timesteps"].shape
-        assert (total_batch_size == config.sample.batch_size * config.sample.num_batches_per_epoch)
-        assert num_timesteps == num_steps
-
+        # Prepare everything with our `accelerator`.
+        training_unet, optimizer = accelerator.prepare(training_unet, optimizer)
+    
         #################### TRAINING ####################
-        for inner_epoch in range(config.train.num_inner_epochs):
-            # shuffle samples along batch dimension
-            perm = torch.randperm(total_batch_size, device=accelerator.device)
-            samples = {k: v[perm] for k, v in samples.items()}
-            prompts = [prompts_list[i] for i in perm]
+        for epoch in range(first_epoch, config.num_epochs):
+            
+            num_batches_per_epoch = config.train.total_samples_per_epoch // config.train.batch_size
 
-            # rebatch for training
-            samples_batched = {
-                k: v.reshape(-1, config.train.batch_size, *v.shape[1:])
-                for k, v in samples.items()
-            }
+            for inner_iters in tqdm(
+                    list(range(num_batches_per_epoch)),
+                    position=0,
+                    disable=not accelerator.is_local_main_process
+                ):
 
-            # dict of lists -> list of dicts for easier iteration
-            samples_batched = [
-                dict(zip(samples_batched, x)) for x in zip(*samples_batched.values())
-            ]
+                with accelerator.accumulate(training_unet), autocast(), torch.enable_grad():
+                    prompts, prompt_metadata = zip(
+                        *[prompt_fn(**config.prompt_fn_kwargs) for _ in range(config.train.batch_size)]
+                    )
+                    prompts = list(prompts)
 
-            prompts_batched = [ prompts[i:i+config.train.batch_size] for i in range(0, len(prompts), config.train.batch_size) ]
+                    # train
+                    pipeline.unet.train()
+                    info = defaultdict(list)
 
-            # train
-            pipeline.unet.train()
-            info = defaultdict(list)
-            for i, (sample, prompts) in tqdm(
-                list(enumerate(zip(samples_batched, prompts_batched))),
-                desc=f"Epoch {epoch}.{inner_epoch}: training",
-                position=0,
-                disable=not accelerator.is_local_main_process,
-            ):
-                sample["latents"].requires_grad = True
+                    truncated_backprop_at = []
+                    for i in range(num_steps):
+                        if i < random.randint(0, num_steps):
+                            truncated_backprop_at.append(i)
+                    if len(truncated_backprop_at) == num_steps:
+                        print("Warning: all timesteps are truncated!")
 
-                def callback_func(self, index, timestep, kwargs):
+                    images_tensor, latents_trajectory, log_probs, training_prev_sample_means = pipeline_with_logprob(
+                        pipeline,
+                        prompt=prompts,
+                        num_inference_steps=num_steps,
+                        guidance_scale=guidance_scale,
+                        eta=config.sample.eta,
+                        output_type="pt",
+                        return_dict=False,
+                        enable_grad=True,
+                        enable_grad_checkpointing=True,
+                        truncated_backprop_at=truncated_backprop_at,
+                    )
+                    assert len(latents) == num_steps + 1
+
+                    pipeline.unet = current_unet
+                    _, _, _, current_prev_sample_means = pipeline_with_logprob(
+                        pipeline,
+                        prompt=prompts,
+                        latents=latents_trajectory[0],
+                        num_inference_steps=num_steps,
+                        guidance_scale=guidance_scale,
+                        eta=config.sample.eta,
+                        output_type="pt",
+                        return_dict=False,
+                        enable_grad=True,
+                        enable_grad_checkpointing=True,
+                        callback_on_step_end=lambda self, index, timestep, kwargs: { "latents": latents_trajectory[index+1] }, 
+                    )
+                    pipeline.unet = training_unet
+
+                    kl_loss = 0.0
+                    for timestep, training_prev_sample_mean, current_prev_sample_mean in zip(pipeline.scheduler.timesteps, training_prev_sample_means, current_prev_sample_means):
+                        scheduler = pipeline.scheduler
+
+                        prev_timestep = timestep - scheduler.config.num_train_timesteps // scheduler.num_inference_steps
+                        variance = scheduler._get_variance(timestep, prev_timestep)
+                        std_dev_t = config.sample.eta * variance ** (0.5)
+
+                        kl_term = (training_prev_sample_mean - current_prev_sample_mean)**2 / (2 * (std_dev_t**2))
+                        kl_term = kl_term.mean(dim=tuple(range(1, kl_term.ndim))) # (batch_size, C, H, W) -> (batch_size,)
+                        kl_loss += kl_term.mean()
+
+                    loss, rewards = surrogate_model(
+                        images = images_tensor.type(torch.float32),
+                        osm_alpha = config.train.osm_alpha,
+                        osm_lambda = config.train.osm_lambda,
+                        osm_clipping = config.train.osm_clipping,
+                        aesthetic_target = config.aesthetic_target,
+                        grad_scale = config.grad_scale
+                    )
+                    loss = loss.mean() * config.train.loss_coeff
                     
-                    nonlocal accelerator, optimizer, unet, info, global_step
-                    with accelerator.accumulate(unet), autocast():
-                        log_prob = kwargs["log_prob"]
-                        
-                        advantages = torch.clamp(
-                            sample["advantages"], -config.train.adv_clip_max, config.train.adv_clip_max
-                        )
-                        ratio = torch.exp(log_prob - sample["log_probs"][:, index])
-                        unclipped_loss = -advantages * ratio
-                        clipped_loss = -advantages * torch.clamp(
-                            ratio, 1.0 - config.train.clip_range, 1.0 + config.train.clip_range
-                        )
-                        loss = torch.mean(torch.maximum(unclipped_loss, clipped_loss))
+                    total_loss = loss + config.train.kl_weight*kl_loss
+                    
+                    rewards_mean = rewards.mean()
+                    rewards_std = rewards.std()
+                    
+                    info["loss"].append(loss)
+                    info["kl_loss"].append(kl_loss)
+                    
+                    # backward pass
+                    accelerator.backward(total_loss)
+                    if accelerator.sync_gradients:
+                        accelerator.clip_grad_norm_(trainable_parameters, config.train.max_grad_norm)
+                    optimizer.step()
+                    optimizer.zero_grad()  
 
-                        # debugging values
-                        # John Schulman says that (ratio - 1) - log(ratio) is a better
-                        # estimator, but most existing code uses this so...
-                        # http://joschu.net/blog/kl-approx.html
-                        info["approx_kl"].append(0.5 * torch.mean((log_prob - sample["log_probs"][:, index]) ** 2))
-                        info["clipfrac"].append(torch.mean((torch.abs(ratio - 1.0) > config.train.clip_range).float()))
-                        info["loss"].append(loss)
+                # Checks if the accelerator has performed an optimization step behind the scenes
+                if accelerator.sync_gradients:
+                    assert (
+                        inner_iters + 1
+                    ) % config.train.gradient_accumulation_steps == 0
 
-                        # backward pass
-                        accelerator.backward(loss)
-                        if accelerator.sync_gradients:
-                            accelerator.clip_grad_norm_(trainable_parameters, config.train.max_grad_norm)
-                        optimizer.step()
-                        optimizer.zero_grad()
+                    #################### LOGGING ####################
+                    info = {k: torch.mean(torch.stack(v)) for k, v in info.items()}
+                    info = accelerator.reduce(info, reduction="mean")
+                    info.update({
+                            "outer_loop": outer_loop,
+                            "train/reward_mean": rewards_mean,
+                            "train/dataset_size": len(surrogate_model),
+                            "train/dataset_y_mean": torch.mean(surrogate_model.y),
+                        }
+                    )
+                    
+                    accelerator.log(info, step=global_step)
+                    
+                    global_step += 1
+                    info = defaultdict(list)
 
-                        # Checks if the accelerator has performed an optimization step behind the scenes
-                        if accelerator.sync_gradients:
-                            assert (index == num_train_timesteps - 1) and (
-                                i + 1
-                            ) % config.train.gradient_accumulation_steps == 0
-                            # log training-related stuff
-                            info = {k: torch.mean(torch.stack(v)) for k, v in info.items()}
-                            info = accelerator.reduce(info, reduction="mean")
-                            info.update({"epoch": epoch, "inner_epoch": inner_epoch})
-                            accelerator.log(info, step=global_step)
-                            global_step += 1
-                            info = defaultdict(list)
+        #################### EVALUATION PER OUTERLOOP ####################
+        
+        eval_prompts, eval_prompt_metadata = zip(
+        *[prompt_fn(**config.prompt_fn_kwargs) for _ in range(config.sample.eval_batch_size)])
+        eval_prompts = list(eval_prompts)
+        eval_generator = torch.Generator(device=accelerator.device)
+        eval_generator.manual_seed(config.seed+1)
 
-                    return {
-                        "latents": sample["next_latents"][:, index]
-                    }
+        # sample
+        with autocast():
+            eval_images, _, _, _ = pipeline_with_logprob(
+                pipeline,
+                prompt=eval_prompts,
+                num_inference_steps=num_steps,
+                guidance_scale=guidance_scale,
+                eta=config.sample.eta,
+                output_type="pt",
+                return_dict=False,
+                generator=eval_generator,
+            )
 
-                _, _, log_probs, _ = pipeline_with_logprob(
-                    pipeline,
-                    prompt=prompts,
-                    latents=sample["latents"][:, 0], # x0
-                    num_inference_steps=num_steps,
-                    guidance_scale=guidance_scale,
-                    eta=config.sample.eta,
-                    output_type="pt",
-                    return_dict=False,
-                    callback_on_step_end=callback_func,
-                    callback_on_step_end_tensor_inputs=["log_prob"],
-                    log_probs_given_trajectory=sample["next_latents"], # x1, ..., xT
-                    enable_grad=True,
+        eval_rewards, eval_rewards_meta = reward_fn(eval_images, eval_prompts, eval_prompt_metadata)
+        eval_rewards = eval_rewards.cpu().numpy()
+
+        # this is a hack to force wandb to log the images as JPEGs instead of PNGs
+        with tempfile.TemporaryDirectory() as tmpdir:
+            wandb_images = []
+            for i, (image, prompt, reward, reward_meta) in enumerate(zip(eval_images, eval_prompts, eval_rewards, eval_rewards_meta)):
+                pil = Image.fromarray((image.cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8))
+                pil = pil.resize((256, 256))
+                pil.save(os.path.join(tmpdir, f"{i}.jpg"))
+                caption = f"{prompt} | {reward:.2f}"
+                if reward_meta is not None and "output" in reward_meta:
+                    caption += f" | {reward_meta['output']}"
+                wandb_images.append(
+                    wandb.Image(os.path.join(tmpdir, f"{i}.jpg"), caption=caption)
                 )
+            accelerator.log({
+                    "outer_loop": outer_loop,
+                    "validation/images": wandb_images,
+                    "validation/reward_mean": eval_rewards.mean(),
+                },
+                step=global_step-1 # log at the end of the training epoch
+            )
+
             # make sure we did an optimization step at the end of the inner epoch
             assert accelerator.sync_gradients
 
-        if epoch != 0 and epoch % config.save_freq == 0 and accelerator.is_main_process:
-            accelerator.save_state()
+            if epoch != 0 and epoch % config.save_freq == 0 and accelerator.is_main_process:
+                accelerator.save_state()
 
-        #################### EVALUATION ####################
-        # (epoch+1) because model already trained for (epoch+1) epochs
-        if (epoch+1)%config.sample.eval_epoch==0:
-            eval_prompts, eval_prompt_metadata = zip(
-            *[prompt_fn(**config.prompt_fn_kwargs) for _ in range(config.sample.eval_batch_size)])
-            eval_prompts = list(eval_prompts)
-            eval_generator = torch.Generator(device=accelerator.device)
-            eval_generator.manual_seed(config.seed+1)
-
-            # sample
-            with autocast():
-                eval_images, _, _, _ = pipeline_with_logprob(
-                    pipeline,
-                    prompt=eval_prompts,
-                    num_inference_steps=num_steps,
-                    guidance_scale=guidance_scale,
-                    eta=config.sample.eta,
-                    output_type="pt",
-                    return_dict=False,
-                    generator=eval_generator,
-                )
-
-            eval_rewards, eval_rewards_meta = reward_fn(eval_images, eval_prompts, eval_prompt_metadata)
-            eval_rewards = eval_rewards.cpu().numpy()
-
-            # this is a hack to force wandb to log the images as JPEGs instead of PNGs
-            with tempfile.TemporaryDirectory() as tmpdir:
-                wandb_images = []
-                for i, (image, prompt, reward, reward_meta) in enumerate(zip(eval_images, eval_prompts, eval_rewards, eval_rewards_meta)):
-                    pil = Image.fromarray((image.cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8))
-                    pil = pil.resize((256, 256))
-                    pil.save(os.path.join(tmpdir, f"{i}.jpg"))
-                    caption = f"{prompt} | {reward:.2f}"
-                    if reward_meta is not None and "output" in reward_meta:
-                        caption += f" | {reward_meta['output']}"
-                    wandb_images.append(
-                        wandb.Image(os.path.join(tmpdir, f"{i}.jpg"), caption=caption)
-                    )
-                accelerator.log({
-                    "validation/images": wandb_images,
-                    "validation/reward_mean": eval_rewards.mean(),
-                    "epoch": epoch },
-                    step=global_step-1 # log at the end of the training epoch
-                )
+            
+        current_unet.load_state_dict(training_unet.state_dict())
+        current_unet.requires_grad_(False)
 
 if __name__ == "__main__":
     app.run(main)
