@@ -268,6 +268,7 @@ def main(_):
 
         all_images_tensor = []
         all_prompts = []
+        all_scores = []
 
         # config.sample.num_batches_per_epoch is not used
         for i in tqdm(
@@ -294,24 +295,28 @@ def main(_):
                     output_type="pt",
                     return_dict=False,
                 )
+            
+            ##### Generate a feedback y(i) = r(x(i)) + ε, (we set ε = 0)
+            scores, outputs = reward_fn(images_tensor, prompts, [{}]*len(images_tensor))
 
             all_images_tensor.append(images_tensor)
-        
+            all_scores.append(scores)
+
         all_images_tensor = torch.cat(all_images_tensor, dim=0)
+        all_scores = torch.cat(all_scores, dim=0)
 
         assert(len(all_images_tensor) == num_samples), "Number of fresh online samples does not match the target number" 
 
-        ##### Generate a feedback y(i) = r(x(i)) + ε, (we set ε = 0)
-        scores, outputs = reward_fn(all_images_tensor, all_prompts, [{}]*num_samples)
-
         ##### Construct a new dataset: D(i) = D(i−1) + (x(i), y(i))
-        surrogate_model.update(all_images_tensor.type(torch.float32), scores)
+        surrogate_model.update(all_images_tensor.type(torch.float32), all_scores)
 
         del all_images_tensor
 
+        surrogate_model.train_MLP(accelerator, config)
+
         ##### Update a diffusion model as {p(i)} by finetuning.
         optimizer = torch.optim.AdamW(
-            training_unet.parameters(),
+            trainable_parameters,
             lr=config.train.learning_rate,
             betas=(config.train.adam_beta1, config.train.adam_beta2),
             weight_decay=config.train.adam_weight_decay,
@@ -332,6 +337,8 @@ def main(_):
                     disable=not accelerator.is_local_main_process
                 ):
 
+                logger.info(f"{config.run_name.rsplit('/', 1)[0]} Loop={outer_loop}/Epoch={epoch}/Iter={inner_iters}: training")
+                
                 with accelerator.accumulate(training_unet), autocast(), torch.enable_grad():
                     prompts, prompt_metadata = zip(
                         *[prompt_fn(**config.prompt_fn_kwargs) for _ in range(config.train.batch_size)]

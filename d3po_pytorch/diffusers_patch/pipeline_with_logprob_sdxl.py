@@ -525,8 +525,9 @@ def pipeline_with_logprob(
             latents = latents * latents_std / self.vae.config.scaling_factor + latents_mean
         else:
             latents = latents / self.vae.config.scaling_factor
-
-        image = self.vae.decode(latents, return_dict=False)[0]
+        
+        with torch.set_grad_enabled(enable_grad):
+            image = self.vae.decode(latents, return_dict=False)[0]
 
         # cast back to fp16 if needed
         if needs_upcasting:
@@ -539,7 +540,8 @@ def pipeline_with_logprob(
         if self.watermark is not None:
             image = self.watermark.apply_watermark(image)
 
-        image = self.image_processor.postprocess(image, output_type=output_type)
+        with torch.set_grad_enabled(enable_grad):
+            image = self.image_processor.postprocess(image, output_type=output_type)
 
     # Offload all models
     self.maybe_free_model_hooks()

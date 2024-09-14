@@ -21,7 +21,7 @@ from diffusers import StableDiffusionPipeline
 from diffusers.pipelines.stable_diffusion.pipeline_output import StableDiffusionPipelineOutput
 from typing import Tuple
 from diffusers.callbacks import PipelineCallback, MultiPipelineCallbacks
-
+from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL
 ######################### copy from parent #########################
 
 @torch.no_grad()
@@ -356,10 +356,11 @@ def pipeline_with_logprob(
                         callback(step_idx, t, latents)
 
         if not output_type == "latent":
-            image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False, generator=generator)[
-                0
-            ]
-            image, has_nsfw_concept = self.run_safety_checker(image, device, prompt_embeds.dtype)
+            with torch.set_grad_enabled(enable_grad):
+                image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False, generator=generator)[
+                    0
+                ]
+                image, has_nsfw_concept = self.run_safety_checker(image, device, prompt_embeds.dtype)
         else:
             image = latents
             has_nsfw_concept = None
@@ -369,7 +370,8 @@ def pipeline_with_logprob(
         else:
             do_denormalize = [not has_nsfw for has_nsfw in has_nsfw_concept]
 
-        image = self.image_processor.postprocess(image, output_type=output_type, do_denormalize=do_denormalize)
+        with torch.set_grad_enabled(enable_grad):
+            image = self.image_processor.postprocess(image, output_type=output_type, do_denormalize=do_denormalize)
 
         # Offload all models
         self.maybe_free_model_hooks()

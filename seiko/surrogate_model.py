@@ -135,11 +135,7 @@ class SurrogateModel(torch.nn.Module):
         args.val_bs = 512
         args.lr = 0.001
         
-        if 'SGLD' in config.train.keys():
-            args.SGLD_base_noise = config.train.SGLD
-            assert config.train.optimism == 'none', "SGLD only works with non-optimism"
-        else:
-            args.SGLD_base_noise = 0
+        args.SGLD_base_noise = 0
         
         optimizer = torch.optim.Adam(self.model.parameters(), lr=args.lr)
         optimizer = accelerator.prepare(optimizer)
@@ -181,19 +177,10 @@ class SurrogateModel(torch.nn.Module):
                     losses.append(loss.item())
                     
                     # add Gaussian noise to gradients
-                    if config.train.num_gpus > 1:
-                        for param in self.model.module.parameters():
-                            if param.grad is not None:
-                                param.grad += noise_level * torch.randn_like(param.grad)
-                    else:
-                        for param in self.model.parameters():
-                            if param.grad is not None:
-                                param.grad += noise_level * torch.randn_like(param.grad)
-                    
-                    # for param in self.model.parameters():
-                    #     if param.grad is not None:
-                    #         param.grad += noise_level * torch.randn_like(param.grad)
-
+                    for param in self.model.parameters():
+                        if param.grad is not None:
+                            param.grad += noise_level * torch.randn_like(param.grad)
+                
 
                     optimizer.step()
                 

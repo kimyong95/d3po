@@ -21,8 +21,22 @@ def get_config():
 
     # debug:
     # config.num_samples_per_outerloop = [32,64,96,128]
-    # config.train.total_samples_per_epoch = 4
+    # config.train.total_samples_per_epoch = 16
     # config.wandb_mode = "disabled"
     # config.sd_model="sd1"
+
+    # aesthetic:
+    # config.num_samples_per_outerloop = [1024,2048,4096,8192]
+    # config.num_epochs = 5
+    # config.prompt_fn = "simple_animals"
+    # config.reward_fn = "aesthetic_score"
+    # config.aesthetic_target = 10
+    # config.sd_model = "sd1"
+    
+    # aesthetic debug:
+    # config.sample.batch_size = 16
+    # config.train.batch_size = 2
+    # config.num_samples_per_outerloop = [16,32,64,128]
+    # config.train.total_samples_per_epoch = 16
     
     return config
