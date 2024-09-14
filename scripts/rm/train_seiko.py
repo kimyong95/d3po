@@ -167,11 +167,10 @@ def main(_):
             if param.requires_grad:
                 param.data = param.to(torch.float32)
         training_unet = pipeline.unet
-        trainable_parameters = filter(lambda p: p.requires_grad, training_unet.parameters())
     else:
         pipeline.unet.requires_grad_(True)
         training_unet = pipeline.unet
-        trainable_parameters = unet.parameters()
+
     
     current_unet = copy.deepcopy(training_unet)
     current_unet.requires_grad_(False)
@@ -260,6 +259,11 @@ def main(_):
     global_step = 0
     for outer_loop, num_samples in enumerate(num_samples_per_outerloop):
 
+        if config.use_lora:
+            trainable_parameters = filter(lambda p: p.requires_grad, training_unet.parameters())
+        else:
+            trainable_parameters = training_unet.parameters()
+
         #################### SAMPLING ####################
         pipeline.unet.eval()
 
@@ -338,7 +342,7 @@ def main(_):
                 ):
 
                 logger.info(f"{config.run_name.rsplit('/', 1)[0]} Loop={outer_loop}/Epoch={epoch}/Iter={inner_iters}: training")
-                
+
                 with accelerator.accumulate(training_unet), autocast(), torch.enable_grad():
                     prompts, prompt_metadata = zip(
                         *[prompt_fn(**config.prompt_fn_kwargs) for _ in range(config.train.batch_size)]
