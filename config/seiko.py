@@ -18,6 +18,7 @@ def get_config():
     config.train.loss_coeff = 0.01
     config.train.kl_weight = 0.01
     config.train.learning_rate = 3e-4
+    config.eval_step = 1 # config.eval_epoch is not used
 
     # debug:
     # config.num_samples_per_outerloop = [32,64,96,128]
@@ -35,8 +36,10 @@ def get_config():
     
     # aesthetic debug:
     # config.sample.batch_size = 16
-    # config.train.batch_size = 2
     # config.num_samples_per_outerloop = [16,32,64,128]
+    # config.train.gradient_accumulation_steps = 1
+    # config.num_epochs = 1
     # config.train.total_samples_per_epoch = 16
+    # config.train.batch_size = 2
     
     return config

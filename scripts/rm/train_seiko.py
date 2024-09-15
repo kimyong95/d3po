@@ -289,6 +289,7 @@ def main(_):
             all_prompts.extend(prompts)
 
             # sample
+            pipeline.unet = training_unet
             with autocast():
                 images_tensor, latents, log_probs, _ = pipeline_with_logprob(
                     pipeline,
@@ -335,11 +336,7 @@ def main(_):
             
             num_batches_per_epoch = config.train.total_samples_per_epoch // config.train.batch_size
 
-            for inner_iters in tqdm(
-                    list(range(num_batches_per_epoch)),
-                    position=0,
-                    disable=not accelerator.is_local_main_process
-                ):
+            for inner_iters in tqdm(list(range(num_batches_per_epoch)),position=0,disable=not accelerator.is_local_main_process):
 
                 logger.info(f"{config.run_name.rsplit('/', 1)[0]} Loop={outer_loop}/Epoch={epoch}/Iter={inner_iters}: training")
 
@@ -360,6 +357,7 @@ def main(_):
                     if len(truncated_backprop_at) == num_steps:
                         print("Warning: all timesteps are truncated!")
 
+                    pipeline.unet = training_unet
                     images_tensor, latents_trajectory, log_probs, training_prev_sample_means = pipeline_with_logprob(
                         pipeline,
                         prompt=prompts,
@@ -425,7 +423,9 @@ def main(_):
                     if accelerator.sync_gradients:
                         accelerator.clip_grad_norm_(trainable_parameters, config.train.max_grad_norm)
                     optimizer.step()
-                    optimizer.zero_grad()  
+                    optimizer.zero_grad()
+
+                    pipeline.unet = training_unet
 
                 # Checks if the accelerator has performed an optimization step behind the scenes
                 if accelerator.sync_gradients:
@@ -448,6 +448,51 @@ def main(_):
                     
                     global_step += 1
                     info = defaultdict(list)
+
+                    #################### EVALUATION PER N STEP ####################
+                    if global_step % config.eval_step == 0:
+                        eval_prompts, eval_prompt_metadata = zip(
+                        *[prompt_fn(**config.prompt_fn_kwargs) for _ in range(config.sample.eval_batch_size)])
+                        eval_prompts = list(eval_prompts)
+                        eval_generator = torch.Generator(device=accelerator.device)
+                        eval_generator.manual_seed(config.seed+1)
+
+                        # sample
+                        with autocast():
+                            eval_images, _, _, _ = pipeline_with_logprob(
+                                pipeline,
+                                prompt=eval_prompts,
+                                num_inference_steps=num_steps,
+                                guidance_scale=guidance_scale,
+                                eta=config.sample.eta,
+                                output_type="pt",
+                                return_dict=False,
+                                generator=eval_generator,
+                            )
+
+                        eval_rewards, eval_rewards_meta = reward_fn(eval_images, eval_prompts, eval_prompt_metadata)
+                        eval_rewards = eval_rewards.cpu().numpy()
+
+                        # this is a hack to force wandb to log the images as JPEGs instead of PNGs
+                        with tempfile.TemporaryDirectory() as tmpdir:
+                            wandb_images = []
+                            for i, (image, prompt, reward, reward_meta) in enumerate(zip(eval_images, eval_prompts, eval_rewards, eval_rewards_meta)):
+                                pil = Image.fromarray((image.cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8))
+                                pil = pil.resize((256, 256))
+                                pil.save(os.path.join(tmpdir, f"{i}.jpg"))
+                                caption = f"{prompt} | {reward:.2f}"
+                                if reward_meta is not None and "output" in reward_meta:
+                                    caption += f" | {reward_meta['output']}"
+                                wandb_images.append(
+                                    wandb.Image(os.path.join(tmpdir, f"{i}.jpg"), caption=caption)
+                                )
+                            accelerator.log({
+                                    "validation_per_step/images": wandb_images,
+                                    "validation_per_step/reward_mean": eval_rewards.mean(),
+                                },
+                                step=global_step-1 # log at the end of the training epoch
+                            )    
+
 
         #################### EVALUATION PER OUTERLOOP ####################
         

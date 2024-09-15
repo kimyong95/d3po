@@ -99,7 +99,13 @@ class SurrogateModel(torch.nn.Module):
     # new_x: images tensor range [0,1]
     def update(self, new_x_images, new_y):
 
-        new_x_embedding = self.clip_embedder(new_x_images)
+        batch_size = 128
+        
+        new_x_embedding = []
+        for i in range(0, len(new_x_images), batch_size):
+            new_x_embedding.append(self.clip_embedder(new_x_images[i:i+batch_size]))
+
+        new_x_embedding = torch.cat(new_x_embedding, dim=0)
 
         if self.x.numel() == 0:
             self.x = new_x_embedding
