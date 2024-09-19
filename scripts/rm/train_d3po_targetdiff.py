@@ -538,14 +538,20 @@ def main(_):
                     receptor_list.append(None)
 
             
-            columns = ["receptor", "ligand"]
-            table = wandb.Table(data=list(zip(receptor_list, ligand_list)), columns=columns)
+            ligand_table = wandb.Table(data=[[ligand_list]], columns=["ligand"])
+            receptor_table = wandb.Table(data=[[receptor_list]], columns=["receptor"])
 
-            accelerator.log({
-                "validation/molecules": table,
+            eval_info = {
+                "validation/molecules_ligand": ligand_table,
                 "validation/reward_mean": eval_rewards.mean(),
                 "validation/raw_score_mean": (-eval_rewards).mean(),
-                "epoch": epoch },
+                "epoch": epoch
+            }
+
+            if (epoch+1) == config.sample.eval_epoch:
+                eval_info["validation/molecules_receptor"] = receptor_table
+            accelerator.log(
+                eval_info,
                 step=global_step-1 # log at the end of the training epoch
             )
 
