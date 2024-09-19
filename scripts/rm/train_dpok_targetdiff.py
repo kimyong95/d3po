@@ -25,6 +25,7 @@ import tqdm
 import tempfile
 import einops
 from PIL import Image
+import torch.distributions.kl as kl
 from peft import LoraConfig, get_peft_model
 from peft.utils import get_peft_model_state_dict
 from huggingface_hub import hf_hub_download
@@ -135,7 +136,7 @@ def main(_):
         gradient_accumulation_steps=config.train.gradient_accumulation_steps * num_train_timesteps,
     )
 
-    wandb_name = f"ddpo-{config.name_subfix}" if config.name_subfix else "ddpo"
+    wandb_name = f"dpok-{config.name_subfix}" if config.name_subfix else "ddpo"
     if accelerator.is_main_process:
         accelerator.init_trackers(
             project_name="finetune-targetdiff",
@@ -406,6 +407,8 @@ def main(_):
                             ratio, 1.0 - config.train.clip_range, 1.0 + config.train.clip_range
                         )
                         loss = torch.mean(torch.maximum(unclipped_loss, clipped_loss))
+                        kl_divergence = kl.kl_divergence(torch.distributions.Categorical(logits=log_prob), torch.distributions.Categorical(logits=sample["log_probs"][:, index]))
+                        loss += config.kl_ratio * kl_divergence.mean()
 
                         # debugging values
                         # John Schulman says that (ratio - 1) - log(ratio) is a better

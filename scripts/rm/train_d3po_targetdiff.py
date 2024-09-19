@@ -25,6 +25,7 @@ import tqdm
 import tempfile
 import einops
 from PIL import Image
+import torch.distributions.kl as kl
 from peft import LoraConfig, get_peft_model
 from peft.utils import get_peft_model_state_dict
 from huggingface_hub import hf_hub_download
@@ -36,6 +37,7 @@ from related_works.targetdiff.models.molopt_score_model import ScorePosNet3D, lo
 from related_works.targetdiff.scripts.sample_diffusion import sample_diffusion_ligand
 from d3po_pytorch.targetdiff_patch.targetdiff_with_logprob import sample_diffusion_ligand_with_logprob
 from related_works.targetdiff.utils.evaluation.docking_vina import VinaDockingTask, PrepLig
+import copy
 
 tqdm = partial(tqdm.tqdm, dynamic_ncols=True)
 
@@ -117,6 +119,8 @@ def main(_):
     }
     num_steps = 200
 
+    assert config.train.batch_size % 2 == 0, "Requires even batch size for D3PO for win/loss pairs"
+
     # number of timesteps within each trajectory to train on
     num_train_timesteps = int(num_steps * config.train.timestep_fraction)
 
@@ -135,7 +139,7 @@ def main(_):
         gradient_accumulation_steps=config.train.gradient_accumulation_steps * num_train_timesteps,
     )
 
-    wandb_name = f"ddpo-{config.name_subfix}" if config.name_subfix else "ddpo"
+    wandb_name = f"d3po-{config.name_subfix}" if config.name_subfix else "ddpo"
     if accelerator.is_main_process:
         accelerator.init_trackers(
             project_name="finetune-targetdiff",
@@ -160,6 +164,10 @@ def main(_):
 
     # Move unet, vae and text_encoder to device and cast to inference_dtype
     model = model.to(accelerator.device)
+
+    ref_model = copy.deepcopy(model)
+    ref_model.requires_grad_(False)
+
     if config.use_lora:
         
         target_modules = [name for name, module in model.named_modules() if isinstance(module, torch.nn.Linear)]
@@ -204,6 +212,27 @@ def main(_):
     accelerator.register_save_state_pre_hook(save_model_hook)
     accelerator.register_load_state_pre_hook(load_model_hook)
 
+
+    # Support multi-dimensional comparison. Default demension is 1. You can add many rewards instead of only one to judge the preference of images.
+    # For example: A: clipscore-30 blipscore-10 LAION aesthetic score-6.0 ; B: 20, 8, 5.0  then A is prefered than B
+    # if C: 40, 4, 4.0 since C[0] = 40 > A[0] and C[1] < A[1], we do not think C is prefered than A or A is prefered than C 
+    def compare(a, b):
+        assert isinstance(a, torch.Tensor) and isinstance(b, torch.Tensor)
+        if len(a.shape)==1:
+            a = a[...,None]
+            b = b[...,None]
+
+        a_dominates = torch.logical_and(torch.all(a <= b, dim=1), torch.any(a < b, dim=1))
+        b_dominates = torch.logical_and(torch.all(b <= a, dim=1), torch.any(b < a, dim=1))
+
+
+        c = torch.zeros([a.shape[0],2],dtype=torch.float,device=a.device)
+
+        c[a_dominates] = torch.tensor([-1., 1.],device=a.device)
+        c[b_dominates] = torch.tensor([1., -1.],device=a.device)
+
+        return c
+
     # Enable TF32 for faster training on Ampere GPUs,
     # cf https://pytorch.org/docs/stable/notes/cuda.html#tensorfloat-32-tf32-on-ampere-devices
     if config.allow_tf32:
@@ -233,12 +262,6 @@ def main(_):
     # prepare prompt and reward fn
     reward_fn = getattr(d3po_pytorch.rewards, config.reward_fn)()
 
-    # initialize stat tracker
-    if config.per_prompt_stat_tracking:
-        stat_tracker = PerPromptStatTracker(
-            config.per_prompt_stat_tracking.buffer_size,
-            config.per_prompt_stat_tracking.min_count,
-        )
 
     # for some reason, autocast is necessary for non-lora training but for lora training it isn't necessary and it uses
     # more memory
@@ -310,7 +333,7 @@ def main(_):
                     "timesteps": timesteps,
                     "pred_pos": pred_pos_traj[:, :-1],  # each entry is the latent before timestep t
                     "next_pred_pos": pred_pos_traj[:, 1:],  # each entry is the latent after timestep t
-                    "log_probs": log_probs,
+                    "log_probs": log_probs, # "log_probs" not used in d3po
                     "rewards": rewards,
                 }
             )
@@ -342,21 +365,6 @@ def main(_):
             step=global_step,
         )
 
-        # per-prompt mean/std tracking
-        if config.per_prompt_stat_tracking:
-            advantages = stat_tracker.update([0.0]*len(rewards), rewards)
-        else:
-            advantages = (rewards - rewards.mean()) / (rewards.std() + 1e-8)
-
-        # ungather advantages; we only need to keep the entries corresponding to the samples on this process
-        samples["advantages"] = (
-            torch.as_tensor(advantages)
-            .reshape(accelerator.num_processes, -1)[accelerator.process_index]
-            .to(accelerator.device)
-        )
-
-        del samples["rewards"]
-
         total_batch_size, num_timesteps = samples["timesteps"].shape
         assert (total_batch_size == config.sample.batch_size * config.sample.num_batches_per_epoch)
         assert num_timesteps == num_steps
@@ -387,32 +395,53 @@ def main(_):
                 disable=not accelerator.is_local_main_process,
             ):
 
+                def next_ligand_pos_func(self, index, timestep, kwargs):
+
+                    offset = kwargs["offset"]
+                    next_ligand_pos = einops.rearrange(sample["next_pred_pos"][:, index], "B N D -> (B N) D") - offset
+
+                    return {
+                        "ligand_pos": next_ligand_pos
+                    }
+
+                _, _, ref_log_probs, _, _, _, _, _ = sample_diffusion_ligand_with_logprob(
+                    ref_model, data, config.train.batch_size,
+                    batch_size=config.train.batch_size, device=accelerator.device,
+                    num_steps=num_steps,
+                    pos_only=True,
+                    center_pos_mode="protein",
+                    sample_num_atoms="ref",
+                    log_probs_given_trajectory=sample["next_pred_pos"], # x1, ..., xT
+                    callback_on_step_end=next_ligand_pos_func,
+                    enable_grad=False,
+                    init_pos=sample["pred_pos"][:, 0],
+                )
+
+
                 def callback_func(self, index, timestep, kwargs):
                     
-                    nonlocal accelerator, optimizer, model, info, global_step
+                    nonlocal accelerator, optimizer, model, info, global_step, ref_log_probs, sample
                     with accelerator.accumulate(model), autocast():
+
                         log_prob = kwargs["log_prob"]
                         log_prob = einops.rearrange(log_prob, "(B N) -> B N", B=config.train.batch_size)
                         log_prob = log_prob.mean(dim=1)
 
                         offset = kwargs["offset"]
 
-                        advantages = torch.clamp(
-                            sample["advantages"], -config.train.adv_clip_max, config.train.adv_clip_max
-                        )
-                        ratio = torch.exp(log_prob - sample["log_probs"][:, index])
-                        unclipped_loss = -advantages * ratio
-                        clipped_loss = -advantages * torch.clamp(
-                            ratio, 1.0 - config.train.clip_range, 1.0 + config.train.clip_range
-                        )
-                        loss = torch.mean(torch.maximum(unclipped_loss, clipped_loss))
+                        ref_log_prob = torch.FloatTensor(np.array(ref_log_probs))[:,index].to(accelerator.device)
 
+                        # half batch size
+                        hb = len(sample["rewards"]) // 2
+
+                        human_prefer = compare(sample["rewards"][hb:],sample["rewards"][:hb])
+
+                        # clip the Q value
+                        ratio_0 = torch.clamp(torch.exp(log_prob[hb:]-ref_log_prob[hb:]),1 - config.train.eps, 1 + config.train.eps)
+                        ratio_1 = torch.clamp(torch.exp(log_prob[:hb]-ref_log_prob[:hb]),1 - config.train.eps, 1 + config.train.eps)
+                        loss = -torch.log(torch.sigmoid(config.train.beta*(torch.log(ratio_0))*human_prefer[:,0] + config.train.beta*(torch.log(ratio_1))*human_prefer[:, 1])).mean()
+                        
                         # debugging values
-                        # John Schulman says that (ratio - 1) - log(ratio) is a better
-                        # estimator, but most existing code uses this so...
-                        # http://joschu.net/blog/kl-approx.html
-                        info["approx_kl"].append(0.5 * torch.mean((log_prob - sample["log_probs"][:, index]) ** 2))
-                        info["clipfrac"].append(torch.mean((torch.abs(ratio - 1.0) > config.train.clip_range).float()))
                         info["loss"].append(loss)
 
                         # backward pass
