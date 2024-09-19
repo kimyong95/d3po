@@ -145,7 +145,7 @@ def main(_):
     logger.info(f"\n{config}")
 
     # set seed (device_specific is very important to get different prompts on different devices)
-    set_seed(config.seed+2, device_specific=True)
+    set_seed(config.seed, device_specific=True)
 
     # freeze parameters of models to save more memory
     model.requires_grad_(False)
