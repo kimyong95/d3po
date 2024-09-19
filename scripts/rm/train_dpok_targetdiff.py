@@ -138,7 +138,7 @@ def main(_):
         gradient_accumulation_steps=config.train.gradient_accumulation_steps * num_train_timesteps,
     )
 
-    wandb_name = f"dpok-data={data_id}-{config.name_subfix}" if config.name_subfix else f"ddpo-data={data_id}"
+    wandb_name = f"dpok-data={data_id}-{config.name_subfix}" if config.name_subfix else f"dpok-data={data_id}"
     if accelerator.is_main_process:
         accelerator.init_trackers(
             project_name="finetune-targetdiff",
