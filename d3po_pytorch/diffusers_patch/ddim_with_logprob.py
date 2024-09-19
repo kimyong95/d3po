@@ -15,9 +15,11 @@ from diffusers.schedulers.scheduling_ddim import DDIMSchedulerOutput, DDIMSchedu
 
 def calculate_log_probs(prev_sample, prev_sample_mean, std_dev_t):
     # log prob of prev_sample given prev_sample_mean and std_dev_t
+
+    clipped_std_dev_t = std_dev_t.clamp(min=1e-6)
     log_prob = (
-        -((prev_sample.detach() - prev_sample_mean) ** 2) / (2 * (std_dev_t**2))
-        - torch.log(std_dev_t)
+        -((prev_sample.detach() - prev_sample_mean) ** 2) / (2 * (clipped_std_dev_t**2))
+        - torch.log(clipped_std_dev_t)
         - torch.log(torch.sqrt(2 * torch.as_tensor(math.pi)))
     )
     # mean along all but batch dimension

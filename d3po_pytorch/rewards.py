@@ -102,3 +102,52 @@ def gemini_choice():
         return choices, metadata
 
     return _fn
+
+from related_works.targetdiff.utils import misc, reconstruct, transforms
+import related_works.targetdiff.utils.transforms as trans
+from rdkit import Chem
+def reconstruct_molecule(pos, v):
+    # reconstruction
+    pred_atom_type = transforms.get_atomic_number_from_index(v, mode="add_aromatic")
+    try:
+        pred_aromatic = transforms.is_aromatic_from_index(v, mode="add_aromatic")
+        mol = reconstruct.reconstruct_from_generated(pos, pred_atom_type, pred_aromatic)
+    except reconstruct.MolReconsError:
+        return None
+
+    return mol
+
+import asyncio
+from related_works.targetdiff.utils.evaluation.docking_vina import VinaDockingTask
+def vina():
+
+    def _fn(pos_v_zip, receptor_info, metadata):
+
+        # Tang S, Chen R, Lin M, Lin Q, Zhu Y, Ding J, Hu H, Ling M, Wu J. Accelerating AutoDock Vina with GPUs. Molecules. 2022 May 9;27(9):3041. doi: 10.3390/molecules27093041. PMID: 35566391; PMCID: PMC9103882.
+        # cite: The AutoDock Vina score for drug-like compounds can reach as low as -11.6 kcal/mol.
+        # used for normalizing the score to [0, 1]
+        MAX_VINA_SCORE = 11.6
+
+        scores = []
+
+        failed_count = 0
+        for i, (pos, v) in enumerate(pos_v_zip):
+            mol = reconstruct_molecule(pos, v)
+            if mol is None:
+                scores.append(0.0)
+                failed_count += 1
+            else:
+                vina_task = VinaDockingTask.from_generated_mol(mol, receptor_info["ligand_filename"], protein_root=receptor_info["protein_root"])
+                vina_score = asyncio.run(vina_task.run(mode='score_only', exhaustiveness=16))
+                scores.append(
+                    vina_score[0]["affinity"]
+                )
+        
+        # minimize scores (lower is better)
+        # maximize rewards (higher is better)
+        scores = torch.FloatTensor(scores)
+        rewards = - scores
+
+        return rewards, metadata
+
+    return _fn
