@@ -112,7 +112,7 @@ def main(_):
                 sorted(checkpoints, key=lambda x: int(x.split("_")[-1]))[-1],
             )
 
-    data_id = config.data_id
+    data_id = int(config.data_id)
 
     model, data = get_targetdiff(data_id=data_id)
     receptor_info = {
