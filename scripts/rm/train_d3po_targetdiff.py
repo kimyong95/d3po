@@ -112,7 +112,9 @@ def main(_):
                 sorted(checkpoints, key=lambda x: int(x.split("_")[-1]))[-1],
             )
 
-    model, data = get_targetdiff(data_id=0)
+    data_id = config.data_id
+
+    model, data = get_targetdiff(data_id=data_id)
     receptor_info = {
         "ligand_filename": data.ligand_filename,
         "protein_root": resolve_targetdiff_relative_dir("data/test_set"),
@@ -139,7 +141,7 @@ def main(_):
         gradient_accumulation_steps=config.train.gradient_accumulation_steps * num_train_timesteps,
     )
 
-    wandb_name = f"d3po-{config.name_subfix}" if config.name_subfix else "ddpo"
+    wandb_name = f"d3po-data={data_id}-{config.name_subfix}" if config.name_subfix else f"ddpo-data={data_id}"
     if accelerator.is_main_process:
         accelerator.init_trackers(
             project_name="finetune-targetdiff",

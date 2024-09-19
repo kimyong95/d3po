@@ -133,9 +133,7 @@ def get_config():
     # if the reward_fn is "aesthetic_score" and you want to reproduce our results, 
     # set config.num_epochs = 1000, sample.num_batches_per_epoch=1, sample.batch_size=8 and sample.eval_batch_size=8
     config.reward_fn = "vina"
-
-    ############ D3PO Specific ############
-    # config.reward_fn_2 = ""
-    config.reward_fn_choice = "gemini_choice"
+    
+    config.data_id = 0
 
     return config
