@@ -189,8 +189,6 @@ def main(_):
 
     def save_model_hook(models, weights, output_dir):
         assert len(models) == 1
-        models[0].save_pretrained(os.path.join(output_dir, "targetdiff"))
-        weights.pop()  # ensures that accelerate doesn't try to handle saving of the model
 
     def load_model_hook(models, input_dir):
         assert len(models) == 1

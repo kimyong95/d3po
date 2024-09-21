@@ -179,7 +179,10 @@ def main(_):
         if config.use_lora:
             state_dict = convert_state_dict_to_diffusers(get_peft_model_state_dict(models[0]))
             pipeline.save_lora_weights(save_directory=output_dir, unet_lora_layers=state_dict)
-            weights.pop()  # ensures that accelerate doesn't try to handle saving of the model
+        elif not config.use_lora:
+            models[0].save_pretrained(os.path.join(output_dir, "unet"))
+        weights.pop()  # ensures that accelerate doesn't try to handle saving of the model
+
         
     def load_model_hook(models, input_dir):
         assert len(models) == 1
