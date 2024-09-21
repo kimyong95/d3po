@@ -29,6 +29,9 @@ from peft.utils import get_peft_model_state_dict
 from huggingface_hub import hf_hub_download
 from safetensors.torch import load_file
 import copy
+from dotenv import load_dotenv
+
+load_dotenv()
 
 tqdm = partial(tqdm.tqdm, dynamic_ncols=True)
 

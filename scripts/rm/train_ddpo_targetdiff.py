@@ -36,6 +36,9 @@ from related_works.targetdiff.models.molopt_score_model import ScorePosNet3D, lo
 from related_works.targetdiff.scripts.sample_diffusion import sample_diffusion_ligand
 from d3po_pytorch.targetdiff_patch.targetdiff_with_logprob import sample_diffusion_ligand_with_logprob
 from related_works.targetdiff.utils.evaluation.docking_vina import VinaDockingTask, PrepLig
+from dotenv import load_dotenv
+
+load_dotenv()
 
 tqdm = partial(tqdm.tqdm, dynamic_ncols=True)
 

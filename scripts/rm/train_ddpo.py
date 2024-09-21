@@ -28,7 +28,9 @@ from peft import LoraConfig
 from peft.utils import get_peft_model_state_dict
 from huggingface_hub import hf_hub_download
 from safetensors.torch import load_file
+from dotenv import load_dotenv
 
+load_dotenv()
 
 tqdm = partial(tqdm.tqdm, dynamic_ncols=True)
 
@@ -177,10 +179,8 @@ def main(_):
         if config.use_lora:
             state_dict = convert_state_dict_to_diffusers(get_peft_model_state_dict(models[0]))
             pipeline.save_lora_weights(save_directory=output_dir, unet_lora_layers=state_dict)
-        elif not config.use_lora:
-            models[0].save_pretrained(os.path.join(output_dir, "unet"))
-        weights.pop()  # ensures that accelerate doesn't try to handle saving of the model
-
+            weights.pop()  # ensures that accelerate doesn't try to handle saving of the model
+        
     def load_model_hook(models, input_dir):
         assert len(models) == 1
         if config.use_lora and isinstance(models[0], AttnProcsLayers):

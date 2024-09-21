@@ -31,7 +31,9 @@ from huggingface_hub import hf_hub_download
 from safetensors.torch import load_file
 import copy
 from seiko.surrogate_model import SurrogateModel
+from dotenv import load_dotenv
 
+load_dotenv()
 tqdm = partial(tqdm.tqdm, dynamic_ncols=True)
 
 
@@ -174,6 +176,7 @@ def main(_):
     
     current_unet = copy.deepcopy(training_unet)
     current_unet.requires_grad_(False)
+    current_unet.eval()
 
     # set up diffusers-friendly checkpoint saving with Accelerate
 
@@ -259,13 +262,8 @@ def main(_):
     global_step = 0
     for outer_loop, num_samples in enumerate(num_samples_per_outerloop):
 
-        if config.use_lora:
-            trainable_parameters = filter(lambda p: p.requires_grad, training_unet.parameters())
-        else:
-            trainable_parameters = training_unet.parameters()
-
         #################### SAMPLING ####################
-        pipeline.unet.eval()
+        pipeline.unet = current_unet
 
         assert num_samples % config.sample.batch_size == 0
         num_samples_batches = num_samples // config.sample.batch_size
@@ -289,7 +287,6 @@ def main(_):
             all_prompts.extend(prompts)
 
             # sample
-            pipeline.unet = training_unet
             with autocast():
                 images_tensor, latents, log_probs, _ = pipeline_with_logprob(
                     pipeline,
@@ -321,7 +318,7 @@ def main(_):
 
         ##### Update a diffusion model as {p(i)} by finetuning.
         optimizer = torch.optim.AdamW(
-            trainable_parameters,
+            filter(lambda p: p.requires_grad, training_unet.parameters()),
             lr=config.train.learning_rate,
             betas=(config.train.adam_beta1, config.train.adam_beta2),
             weight_decay=config.train.adam_weight_decay,
@@ -347,7 +344,8 @@ def main(_):
                     prompts = list(prompts)
 
                     # train
-                    pipeline.unet.train()
+                    
+
                     info = defaultdict(list)
 
                     truncated_backprop_at = []
@@ -356,7 +354,7 @@ def main(_):
                             truncated_backprop_at.append(i)
                     if len(truncated_backprop_at) == num_steps:
                         print("Warning: all timesteps are truncated!")
-
+                    
                     pipeline.unet = training_unet
                     images_tensor, latents_trajectory, log_probs, training_prev_sample_means = pipeline_with_logprob(
                         pipeline,
@@ -421,11 +419,9 @@ def main(_):
                     # backward pass
                     accelerator.backward(total_loss)
                     if accelerator.sync_gradients:
-                        accelerator.clip_grad_norm_(trainable_parameters, config.train.max_grad_norm)
+                        accelerator.clip_grad_norm_(filter(lambda p: p.requires_grad, training_unet.parameters()), config.train.max_grad_norm)
                     optimizer.step()
                     optimizer.zero_grad()
-
-                    pipeline.unet = training_unet
 
                 # Checks if the accelerator has performed an optimization step behind the scenes
                 if accelerator.sync_gradients:
@@ -486,9 +482,16 @@ def main(_):
                                 wandb_images.append(
                                     wandb.Image(os.path.join(tmpdir, f"{i}.jpg"), caption=caption)
                                 )
+                            current_param_sum=0
+                            for param in current_unet.parameters():
+                                current_param_sum += param.sum()
+                            training_param_sum=0
+                            for param in training_unet.parameters():
+                                training_param_sum += param.sum()
                             accelerator.log({
                                     "validation_per_step/images": wandb_images,
                                     "validation_per_step/reward_mean": eval_rewards.mean(),
+                                    "validation_per_step/param_diff": (current_param_sum-training_param_sum),
                                 },
                                 step=global_step-1 # log at the end of the training epoch
                             )    
@@ -545,9 +548,9 @@ def main(_):
             if epoch != 0 and epoch % config.save_freq == 0 and accelerator.is_main_process:
                 accelerator.save_state()
 
-            
-        current_unet.load_state_dict(training_unet.state_dict())
+        current_unet = copy.deepcopy(training_unet)
         current_unet.requires_grad_(False)
+        current_unet.eval()
 
 if __name__ == "__main__":
     app.run(main)
