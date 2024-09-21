@@ -117,35 +117,49 @@ def reconstruct_molecule(pos, v):
 
     return mol
 
+async def get_score(pos, v, receptor_info):
+
+    # Tang S, Chen R, Lin M, Lin Q, Zhu Y, Ding J, Hu H, Ling M, Wu J. Accelerating AutoDock Vina with GPUs. Molecules. 2022 May 9;27(9):3041. doi: 10.3390/molecules27093041. PMID: 35566391; PMCID: PMC9103882.
+    # cite: The AutoDock Vina score for drug-like compounds can reach as low as -11.6 kcal/mol.
+    # used for normalizing the score to [0, 1]
+    MAX_VINA_SCORE = 11.6
+
+    ligand_filename = receptor_info["ligand_filename"]
+    protein_root = receptor_info["protein_root"]
+    vina_web_url = receptor_info["vina_web_url"]
+
+    score = 0.0
+    mol = reconstruct_molecule(pos, v)
+    if mol is not None:
+        vina_task = VinaDockingTask.from_generated_mol(mol, ligand_filename, protein_root=protein_root, web_dock_url=vina_web_url)
+        score = (await vina_task.run(mode='score_only', exhaustiveness=16))[0]["affinity"] / MAX_VINA_SCORE
+    
+    failed = bool(mol is None)
+
+    return score, failed
+
+import random
+async def get_scores_async(pos_list, v_list, receptor_info):
+
+    tasks = [get_score(pos,v, receptor_info) for pos, v in zip(pos_list, v_list)]
+    results = await asyncio.gather(*tasks)
+    scores, failed = map(list, zip(*results))
+    failed_count = sum(failed)
+    return torch.FloatTensor(scores), failed_count
+
+
 import asyncio
 from related_works.targetdiff.utils.evaluation.docking_vina import VinaDockingTask
 def vina():
 
     def _fn(pos_v_zip, receptor_info, metadata):
 
-        # Tang S, Chen R, Lin M, Lin Q, Zhu Y, Ding J, Hu H, Ling M, Wu J. Accelerating AutoDock Vina with GPUs. Molecules. 2022 May 9;27(9):3041. doi: 10.3390/molecules27093041. PMID: 35566391; PMCID: PMC9103882.
-        # cite: The AutoDock Vina score for drug-like compounds can reach as low as -11.6 kcal/mol.
-        # used for normalizing the score to [0, 1]
-        MAX_VINA_SCORE = 11.6
-
-        scores = []
-
-        failed_count = 0
-        for i, (pos, v) in enumerate(pos_v_zip):
-            mol = reconstruct_molecule(pos, v)
-            if mol is None:
-                scores.append(0.0)
-                failed_count += 1
-            else:
-                vina_task = VinaDockingTask.from_generated_mol(mol, receptor_info["ligand_filename"], protein_root=receptor_info["protein_root"])
-                vina_score = asyncio.run(vina_task.run(mode='score_only', exhaustiveness=16))
-                scores.append(
-                    vina_score[0]["affinity"]
-                )
+        pos_list, v_list = map(list, zip(*pos_v_zip))
+        
+        scores, failed_count = asyncio.run(get_scores_async(pos_list, v_list, receptor_info))
         
         # minimize scores (lower is better)
         # maximize rewards (higher is better)
-        scores = torch.FloatTensor(scores)
         rewards = - scores
 
         return rewards, metadata

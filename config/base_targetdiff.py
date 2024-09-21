@@ -28,7 +28,7 @@ def get_config():
     # attention layers of the UNet. with LoRA, fp16, and a batch size of 1, finetuning Stable Diffusion should take
     # about 10GB of GPU memory. beware that if LoRA is disabled, training will take a lot of memory and saved checkpoint
     # files will also be large.
-    config.use_lora = True
+    config.use_lora = False
     config.wandb_mode = "online"
 
     ############ Pretrained Model ############
@@ -133,7 +133,7 @@ def get_config():
     # if the reward_fn is "aesthetic_score" and you want to reproduce our results, 
     # set config.num_epochs = 1000, sample.num_batches_per_epoch=1, sample.batch_size=8 and sample.eval_batch_size=8
     config.reward_fn = "vina"
-    
+    config.vina_web_url = "https://foydiwfg7gjyejxzapwso5czuu0jzxwt.lambda-url.us-east-2.on.aws"
     config.data_id = 0
 
     return config

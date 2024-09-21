@@ -116,6 +116,7 @@ def main(_):
     receptor_info = {
         "ligand_filename": data.ligand_filename,
         "protein_root": resolve_targetdiff_relative_dir("data/test_set"),
+        "vina_web_url": config.vina_web_url if config.vina_web_url else None,
     }
     num_steps = 200
 
@@ -149,9 +150,6 @@ def main(_):
     # set seed (device_specific is very important to get different prompts on different devices)
     set_seed(config.seed, device_specific=True)
 
-    # freeze parameters of models to save more memory
-    model.requires_grad_(False)
-
     # For mixed precision training we cast all non-trainable weigths (vae, non-lora text_encoder and non-lora unet) to half-precision
     # as these weights are only used for inference, keeping weights in full precision is not required.
     inference_dtype = torch.float32
@@ -161,20 +159,27 @@ def main(_):
         inference_dtype = torch.bfloat16
 
     # Move unet, vae and text_encoder to device and cast to inference_dtype
-    model = model.to(accelerator.device)
+    model = model.to(accelerator.device, inference_dtype)
     if config.use_lora:
         
         target_modules = [name for name, module in model.named_modules() if isinstance(module, torch.nn.Linear)]
 
         lora_config = LoraConfig(
             init_lora_weights="gaussian",
-            target_modules=target_modules,
+            target_modules=[
+                "hk_func.net.0", "hk_func.net.3",
+                "hq_func.net.0", "hq_func.net.3",
+                "hv_func.net.0", "hv_func.net.3",
+                "refine_net.edge_pred_layer.net.0",
+                "refine_net.edge_pred_layer.net.3",
+            ],
         )
-
+        model.requires_grad_(False)
         model = get_peft_model(model, lora_config)
 
         trainable_parameters = filter(lambda p: p.requires_grad, model.parameters())
     else:
+        model.requires_grad_(True)
         trainable_parameters = model.parameters()
 
     # set up diffusers-friendly checkpoint saving with Accelerate
