@@ -25,7 +25,6 @@ import tqdm
 import tempfile
 import einops
 from PIL import Image
-import torch.distributions.kl as kl
 from peft import LoraConfig, get_peft_model
 from peft.utils import get_peft_model_state_dict
 from huggingface_hub import hf_hub_download
@@ -120,6 +119,7 @@ def main(_):
     receptor_info = {
         "ligand_filename": data.ligand_filename,
         "protein_root": resolve_targetdiff_relative_dir("data/test_set"),
+        "vina_web_url": config.vina_web_url if config.vina_web_url else None,
     }
     num_steps = 200
 
@@ -153,9 +153,6 @@ def main(_):
     # set seed (device_specific is very important to get different prompts on different devices)
     set_seed(config.seed, device_specific=True)
 
-    # freeze parameters of models to save more memory
-    model.requires_grad_(False)
-
     # For mixed precision training we cast all non-trainable weigths (vae, non-lora text_encoder and non-lora unet) to half-precision
     # as these weights are only used for inference, keeping weights in full precision is not required.
     inference_dtype = torch.float32
@@ -172,21 +169,26 @@ def main(_):
 
         lora_config = LoraConfig(
             init_lora_weights="gaussian",
-            target_modules=target_modules,
+            target_modules=[
+                "hk_func.net.0", "hk_func.net.3",
+                "hq_func.net.0", "hq_func.net.3",
+                "hv_func.net.0", "hv_func.net.3",
+                "refine_net.edge_pred_layer.net.0",
+                "refine_net.edge_pred_layer.net.3",
+            ],
         )
-
+        model.requires_grad_(False)
         model = get_peft_model(model, lora_config)
 
         trainable_parameters = filter(lambda p: p.requires_grad, model.parameters())
     else:
+        model.requires_grad_(True)
         trainable_parameters = model.parameters()
 
     # set up diffusers-friendly checkpoint saving with Accelerate
 
     def save_model_hook(models, weights, output_dir):
         assert len(models) == 1
-        models[0].save_pretrained(os.path.join(output_dir, "targetdiff"))
-        weights.pop()  # ensures that accelerate doesn't try to handle saving of the model
 
     def load_model_hook(models, input_dir):
         assert len(models) == 1
@@ -344,6 +346,10 @@ def main(_):
                 "epoch": epoch,
                 "train/reward_mean": rewards.mean(),
                 "train/raw_score_mean": (-rewards).mean(),
+                "train/reward_max": rewards.max(),
+                "train/raw_score_min": (-rewards).min(),
+                "train/reward_median": np.median(rewards),
+                "train/raw_score_median": np.median(-rewards),
             },
             step=global_step,
         )
@@ -514,7 +520,6 @@ def main(_):
                     ligand_list.append(None)
                     receptor_list.append(None)
 
-            
             ligand_table = wandb.Table(data=[[ligand_list]], columns=["ligand"])
             receptor_table = wandb.Table(data=[[receptor_list]], columns=["receptor"])
 
@@ -522,6 +527,10 @@ def main(_):
                 "validation/molecules_ligand": ligand_table,
                 "validation/reward_mean": eval_rewards.mean(),
                 "validation/raw_score_mean": (-eval_rewards).mean(),
+                "validation/reward_max": eval_rewards.max(),
+                "validation/raw_score_min": (-eval_rewards).min(),
+                "validation/reward_median": np.median(eval_rewards),
+                "validation/raw_score_median": np.median(-eval_rewards),
                 "epoch": epoch
             }
 

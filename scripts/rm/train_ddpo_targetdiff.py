@@ -162,7 +162,7 @@ def main(_):
         inference_dtype = torch.bfloat16
 
     # Move unet, vae and text_encoder to device and cast to inference_dtype
-    model = model.to(accelerator.device, inference_dtype)
+    model = model.to(accelerator.device)
     if config.use_lora:
         
         target_modules = [name for name, module in model.named_modules() if isinstance(module, torch.nn.Linear)]
