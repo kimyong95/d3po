@@ -457,10 +457,11 @@ def main(_):
                         info["loss"].append(loss)
 
                         # backward pass
-                        accelerator.backward(loss)
-                        if accelerator.sync_gradients:
-                            accelerator.clip_grad_norm_(trainable_parameters, config.train.max_grad_norm)
-                        optimizer.step()
+                        if not loss.isnan().any():
+                            accelerator.backward(loss)
+                            if accelerator.sync_gradients:
+                                accelerator.clip_grad_norm_(trainable_parameters, config.train.max_grad_norm)
+                            optimizer.step()
                         optimizer.zero_grad()
 
                         # Checks if the accelerator has performed an optimization step behind the scenes

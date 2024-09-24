@@ -44,7 +44,7 @@ def get_config():
     # eval batch_size
     sample.eval_batch_size = 16
     # eval epoch
-    sample.eval_epoch = 1
+    sample.eval_epoch = 5
     # batch size (per GPU!) to use for sampling.
     sample.batch_size = 32
     # number of batches to sample per epoch.
