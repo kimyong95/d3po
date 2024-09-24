@@ -346,6 +346,10 @@ def main(_):
                 "epoch": epoch,
                 "train/reward_mean": rewards.mean(),
                 "train/raw_score_mean": (-rewards).mean(),
+                "train/reward_max": rewards.max(),
+                "train/raw_score_min": (-rewards).min(),
+                "train/reward_median": np.median(rewards),
+                "train/raw_score_median": np.median(-rewards),
             },
             step=global_step,
         )
@@ -521,6 +525,10 @@ def main(_):
                 "validation/molecules_ligand": ligand_table,
                 "validation/reward_mean": eval_rewards.mean(),
                 "validation/raw_score_mean": (-eval_rewards).mean(),
+                "validation/reward_max": eval_rewards.max(),
+                "validation/raw_score_min": (-eval_rewards).min(),
+                "validation/reward_median": np.median(eval_rewards),
+                "validation/raw_score_median": np.median(-eval_rewards),
                 "epoch": epoch
             }
 

@@ -64,7 +64,7 @@ def get_config():
     # whether to use the 8bit Adam optimizer from bitsandbytes.
     train.use_8bit_adam = False
     # learning rate.
-    train.learning_rate = 1e-3
+    train.learning_rate = 3e-5
     # Adam beta1.
     train.adam_beta1 = 0.9
     # Adam beta2.
@@ -133,7 +133,7 @@ def get_config():
     # if the reward_fn is "aesthetic_score" and you want to reproduce our results, 
     # set config.num_epochs = 1000, sample.num_batches_per_epoch=1, sample.batch_size=8 and sample.eval_batch_size=8
     config.reward_fn = "vina"
-    config.vina_web_url = "https://foydiwfg7gjyejxzapwso5czuu0jzxwt.lambda-url.us-east-2.on.aws"
+    config.vina_web_url = "https://qylhug6f6qwh7xbs5zsewfzwi40hktit.lambda-url.ap-southeast-1.on.aws"
     config.data_id = 0
 
     return config

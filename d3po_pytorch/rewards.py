@@ -132,8 +132,8 @@ async def get_score(pos, v, receptor_info):
     mol = reconstruct_molecule(pos, v)
     if mol is not None:
         vina_task = VinaDockingTask.from_generated_mol(mol, ligand_filename, protein_root=protein_root, web_dock_url=vina_web_url)
-        score = (await vina_task.run(mode='score_only', exhaustiveness=16))[0]["affinity"]
-    
+        score = (await vina_task.run(mode='minimize', exhaustiveness=16))[0]["affinity"]
+        score = score if score < 0.0 else 0.0
     failed = bool(mol is None)
 
     return score, failed
