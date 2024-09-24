@@ -25,6 +25,7 @@ import tqdm
 import tempfile
 import einops
 from PIL import Image
+import torch.distributions.kl as kl
 from peft import LoraConfig, get_peft_model
 from peft.utils import get_peft_model_state_dict
 from huggingface_hub import hf_hub_download
