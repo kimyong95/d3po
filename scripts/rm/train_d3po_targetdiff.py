@@ -37,6 +37,7 @@ from related_works.targetdiff.models.molopt_score_model import ScorePosNet3D, lo
 from related_works.targetdiff.scripts.sample_diffusion import sample_diffusion_ligand
 from d3po_pytorch.targetdiff_patch.targetdiff_with_logprob import sample_diffusion_ligand_with_logprob
 from related_works.targetdiff.utils.evaluation.docking_vina import VinaDockingTask, PrepLig
+import uuid
 import copy
 from dotenv import load_dotenv
 
@@ -97,7 +98,7 @@ def main(_):
     # basic Accelerate and logging setup
     config = FLAGS.config
 
-    unique_id = datetime.datetime.now().strftime("%Y.%m.%d_%H.%M.%S")
+    unique_id = datetime.datetime.now().strftime("%Y.%m.%d_%H.%M.%S") + "_" + str(uuid.uuid4())[:8]
     if not config.run_name:
         config.run_name = unique_id
     else:
@@ -457,11 +458,10 @@ def main(_):
                         info["loss"].append(loss)
 
                         # backward pass
-                        if not loss.isnan().any():
-                            accelerator.backward(loss)
-                            if accelerator.sync_gradients:
-                                accelerator.clip_grad_norm_(trainable_parameters, config.train.max_grad_norm)
-                            optimizer.step()
+                        accelerator.backward(loss)
+                        if accelerator.sync_gradients:
+                            accelerator.clip_grad_norm_(trainable_parameters, config.train.max_grad_norm)
+                        optimizer.step()
                         optimizer.zero_grad()
 
                         # Checks if the accelerator has performed an optimization step behind the scenes
