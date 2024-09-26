@@ -449,10 +449,18 @@ def main(_):
 
                         human_prefer = compare(sample["rewards"][hb:],sample["rewards"][:hb])
 
+                        # replace by below to solve numerical issue: torch.exp(log_prob[hb:]-ref_log_prob[hb:]) could be very large and cause NaN
+                        # ratio_0 = torch.clamp(torch.exp(log_prob[hb:]-ref_log_prob[hb:]),1 - config.train.eps, 1 + config.train.eps)
+                        # ratio_1 = torch.clamp(torch.exp(log_prob[:hb]-ref_log_prob[:hb]),1 - config.train.eps, 1 + config.train.eps)
+                        # loss = -torch.log(torch.sigmoid(config.train.beta*(torch.log(ratio_0))*human_prefer[:,0] + config.train.beta*(torch.log(ratio_1))*human_prefer[:, 1])).mean()
+
                         # clip the Q value
-                        ratio_0 = torch.clamp(torch.exp(log_prob[hb:]-ref_log_prob[hb:]),1 - config.train.eps, 1 + config.train.eps)
-                        ratio_1 = torch.clamp(torch.exp(log_prob[:hb]-ref_log_prob[:hb]),1 - config.train.eps, 1 + config.train.eps)
-                        loss = -torch.log(torch.sigmoid(config.train.beta*(torch.log(ratio_0))*human_prefer[:,0] + config.train.beta*(torch.log(ratio_1))*human_prefer[:, 1])).mean()
+                        clamp_min = torch.log(torch.tensor(1) - config.train.eps).to(accelerator.device)
+                        clamp_max = torch.log(torch.tensor(1) + config.train.eps).to(accelerator.device)
+
+                        ratio_0 = torch.clamp(log_prob[hb:]-ref_log_prob[hb:], clamp_min, clamp_max)
+                        ratio_1 = torch.clamp(log_prob[:hb]-ref_log_prob[:hb], clamp_min, clamp_max)
+                        loss = -torch.log(torch.sigmoid(config.train.beta*ratio_0*human_prefer[:,0] + config.train.beta*ratio_1*human_prefer[:, 1])).mean()
                         
                         # debugging values
                         info["loss"].append(loss)
