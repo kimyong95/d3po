@@ -65,6 +65,23 @@ def gemini():
 
     return _fn
 
+def gemini_binary():
+    from utils.rewards import GeminiQuestion
+    gemini = GeminiQuestion().to(torch.device("cuda"))
+    query = "Does the image accurately, precisely and comprehensively described by the prompt '{target_prompt}'? Answer score=0 (no) or score=1 (yes).\nAnswer in the format: Score=(score), Reason=(reason)."
+    
+    def _fn(images, prompts, metadata):
+        assert all(x == prompts[0] for x in prompts)
+        prompt = prompts[0]
+
+        images = VaeImageProcessor.numpy_to_pil(VaeImageProcessor.pt_to_numpy(images))
+        scores, outputs = gemini(images, prompt, query, max_reward=1.0)
+        for i, output in enumerate(outputs):
+            metadata[i]["output"] = output
+        return scores, metadata
+
+    return _fn
+
 def gemini_choice():
     from utils.rewards import GeminiQuestion
     gemini = GeminiQuestion().to(torch.device("cuda"))

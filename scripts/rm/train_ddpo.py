@@ -75,7 +75,7 @@ def main(_):
         num_steps = 50
         guidance_scale = 5.0
 
-    elif config.sd_model == "sdxl":
+    elif config.sd_model == "sdxl-lightning":
         from d3po_pytorch.diffusers_patch.pipeline_with_logprob_sdxl import pipeline_with_logprob
 
         model_id = "stabilityai/stable-diffusion-xl-base-1.0"
@@ -89,6 +89,19 @@ def main(_):
 
         num_steps = 8
         guidance_scale = 0.0
+    elif config.sd_model == "sdxl":
+        from d3po_pytorch.diffusers_patch.pipeline_with_logprob_sdxl import pipeline_with_logprob
+
+        model_id = "stabilityai/stable-diffusion-xl-base-1.0"
+        vae = AutoencoderKL.from_pretrained("madebyollin/sdxl-vae-fp16-fix", torch_dtype=torch.float16)
+        unet = UNet2DConditionModel.from_pretrained(model_id, subfolder="unet", torch_dtype=torch.float16, use_safetensors=True, variant="fp16")
+        # only tested and works with DDIM for now
+        scheduler = DDIMScheduler.from_pretrained(model_id, subfolder="scheduler", timestep_spacing="trailing")
+        pipeline = StableDiffusionXLPipeline.from_pretrained(model_id, unet=unet, vae=vae, scheduler=scheduler, torch_dtype=torch.float16, use_safetensors=True, variant="fp16")
+        pipeline.enable_vae_slicing()
+
+        num_steps = 30
+        guidance_scale = 7.0
 
     if config.fixed_prompt and config.prompt_fn == "fixed":
         config.prompt_fn_kwargs = { "prompt": config.fixed_prompt }
@@ -500,7 +513,7 @@ def main(_):
                 wandb_images = []
                 for i, (image, prompt, reward, reward_meta) in enumerate(zip(eval_images, eval_prompts, eval_rewards, eval_rewards_meta)):
                     pil = Image.fromarray((image.cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8))
-                    pil = pil.resize((256, 256))
+                    pil = pil.resize((512, 512))
                     pil.save(os.path.join(tmpdir, f"{i}.jpg"))
                     caption = f"{prompt} | {reward:.2f}"
                     if reward_meta is not None and "output" in reward_meta:

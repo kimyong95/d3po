@@ -36,6 +36,8 @@ dependencies:
   - rdkit=2023.09.6
   - openbabel=3.1.1
   - jsonpickle=3.0
+  - pyg::pytorch-scatter=2.1.2
+  - pyg::pyg=2.6.1
   ############################
   - pip:
     - jsonargparse[signatures]==4.27.7
@@ -43,5 +45,4 @@ dependencies:
     ###### for targetdiff ######
     # - git+https://github.com/Valdes-Tresanco-MS/AutoDockTools_py3.git@aee55d50d5bdcfdbcd80220499df8cde2a8f4b2a
     # - meeko==0.1.dev3
-    # - torch_geometric pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv -f https://data.pyg.org/whl/torch-2.4.0+cu124.html
     ############################
