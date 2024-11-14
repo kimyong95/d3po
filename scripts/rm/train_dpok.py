@@ -29,6 +29,7 @@ from peft import LoraConfig
 from peft.utils import get_peft_model_state_dict
 from huggingface_hub import hf_hub_download
 from safetensors.torch import load_file
+import uuid
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -46,7 +47,7 @@ def main(_):
     # basic Accelerate and logging setup
     config = FLAGS.config
 
-    unique_id = datetime.datetime.now().strftime("%Y.%m.%d_%H.%M.%S")
+    unique_id = datetime.datetime.now().strftime("%Y.%m.%d_%H.%M.%S") + "_" + str(uuid.uuid4())[:8]
     if not config.run_name:
         config.run_name = unique_id
     else:
