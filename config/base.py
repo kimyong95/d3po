@@ -13,7 +13,7 @@ def get_config():
     # top-level logging directory for checkpoint saving.
     config.logdir = "logs"
     # number of epochs to train for. each epoch is one round of sampling from the model followed by training on those samples.
-    config.num_epochs = 50
+    config.num_epochs = 200
     # number of epochs between saving model checkpoints.
     config.save_freq = 10
     # mixed precision training. options are "fp16", "bf16", and "no". half-precision speeds up training significantly.
@@ -32,7 +32,7 @@ def get_config():
     config.wandb_mode = "online"
 
     ############ Pretrained Model ############
-    config.sd_model = "sdxl"
+    config.sd_model = "sdxl-lightning"
 
     ############ Sampling ############
     config.sample = sample = ml_collections.ConfigDict()
@@ -54,9 +54,9 @@ def get_config():
     ############ Training ############
     config.train = train = ml_collections.ConfigDict()
     # batch size (per GPU!) to use for training.
-    train.batch_size = 2
+    train.batch_size = 4
     # number of gradient accumulation steps.
-    train.gradient_accumulation_steps = 2
+    train.gradient_accumulation_steps = 1
     # the effective batch size is `batch_size * num_gpus * gradient_accumulation_steps`.
     # effective batch size: 2*2 = 4
     # gradient updates per epoch: 32 / 4 = 8
@@ -132,8 +132,7 @@ def get_config():
     # if the reward_fn is "jpeg_compressibility" or "jpeg_incompressibility", using the default config can reproduce our results.
     # if the reward_fn is "aesthetic_score" and you want to reproduce our results, 
     # set config.num_epochs = 1000, sample.num_batches_per_epoch=1, sample.batch_size=8 and sample.eval_batch_size=8
-    # config.reward_fn = "gemini"
-    config.reward_fn = "gemini_binary"
+    config.reward_fn = "gemini"
 
     ############ D3PO Specific ############
     # config.reward_fn_2 = ""
