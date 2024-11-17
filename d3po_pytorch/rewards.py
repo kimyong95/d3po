@@ -22,7 +22,8 @@ def jpeg_incompressibility():
         for image, buffer in zip(images, buffers):
             image.save(buffer, format="JPEG", quality=95)
         sizes = [buffer.tell() / 1000 for buffer in buffers]
-        return np.array(sizes), {}
+        
+        return torch.as_tensor(sizes), [{}] * len(images)
 
     return _fn
 
@@ -45,7 +46,7 @@ def aesthetic_score():
     def _fn(images, prompts, metadata):
         images = (images * 255).round().clamp(0, 255).to(torch.uint8)
         scores = scorer(images)
-        return scores, {}
+        return scores, [{}] * len(images)
 
     return _fn
 

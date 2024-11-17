@@ -518,9 +518,15 @@ def main(_):
         #################### EVALUATION ####################
         # (epoch+1) because model already trained for (epoch+1) epochs
         if (epoch+1)%config.sample.eval_epoch==0:
-            eval_prompts, eval_prompt_metadata = zip(
-            *[prompt_fn(**config.prompt_fn_kwargs) for _ in range(config.sample.eval_batch_size)])
-            eval_prompts = list(eval_prompts)
+            if config.get("eval_prompt_fn") == "fixed":
+                eval_prompts = config.eval_fixed_prompt
+                assert len(eval_prompts) == config.sample.eval_batch_size
+                eval_prompt_metadata = [{}] * config.sample.eval_batch_size
+            else:
+                eval_prompts, eval_prompt_metadata = zip(
+                *[prompt_fn(**config.prompt_fn_kwargs) for _ in range(config.sample.eval_batch_size)])
+                eval_prompts = list(eval_prompts)
+            
             eval_generator = torch.Generator(device=accelerator.device)
             eval_generator.manual_seed(config.seed+1)
 

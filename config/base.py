@@ -135,7 +135,6 @@ def get_config():
     config.reward_fn = "gemini"
 
     ############ D3PO Specific ############
-    # config.reward_fn_2 = ""
     config.reward_fn_choice = "gemini_choice"
 
     return config
