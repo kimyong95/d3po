@@ -88,6 +88,7 @@ def main(_):
         scheduler = DDIMScheduler.from_pretrained(model_id, subfolder="scheduler", timestep_spacing="trailing")
         pipeline = StableDiffusionXLPipeline.from_pretrained(model_id, unet=unet, vae=vae, scheduler=scheduler, torch_dtype=torch.float16, use_safetensors=True, variant="fp16")
         pipeline.enable_vae_slicing()
+        pipeline.vae.encoder = None
 
         num_steps = 8
         guidance_scale = 0.0
@@ -101,6 +102,7 @@ def main(_):
         scheduler = DDIMScheduler.from_pretrained(model_id, subfolder="scheduler", timestep_spacing="trailing")
         pipeline = StableDiffusionXLPipeline.from_pretrained(model_id, unet=unet, vae=vae, scheduler=scheduler, torch_dtype=torch.float16, use_safetensors=True, variant="fp16")
         pipeline.enable_vae_slicing()
+        pipeline.vae.encoder = None
 
         num_steps = 30
         guidance_scale = 7.0
