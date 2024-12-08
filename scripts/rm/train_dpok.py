@@ -99,7 +99,7 @@ def main(_):
         vae = AutoencoderKL.from_pretrained("madebyollin/sdxl-vae-fp16-fix", torch_dtype=torch.float16)
         unet = UNet2DConditionModel.from_pretrained(model_id, subfolder="unet", torch_dtype=torch.float16, use_safetensors=True, variant="fp16")
         # only tested and works with DDIM for now
-        scheduler = DDIMScheduler.from_pretrained(model_id, subfolder="scheduler", timestep_spacing="trailing")
+        scheduler = DDIMScheduler.from_pretrained(model_id, subfolder="scheduler")
         pipeline = StableDiffusionXLPipeline.from_pretrained(model_id, unet=unet, vae=vae, scheduler=scheduler, torch_dtype=torch.float16, use_safetensors=True, variant="fp16")
         pipeline.enable_vae_slicing()
         pipeline.vae.encoder = None
@@ -267,6 +267,65 @@ def main(_):
     # Prepare everything with our `accelerator`.
     unet, optimizer = accelerator.prepare(unet, optimizer)
 
+    def evaluate(
+        epoch: int,
+        global_step,
+        pipeline,
+    ):
+        # Generate evaluation prompts
+        if config.get("eval_prompt_fn") == "fixed":
+            eval_prompts = config.eval_fixed_prompt
+            assert len(eval_prompts) == config.sample.eval_batch_size, "Mismatch in eval_batch_size and number of eval_prompts."
+            eval_prompt_metadata = [{}] * config.sample.eval_batch_size
+        else:
+            eval_prompts, eval_prompt_metadata = zip(
+                *[prompt_fn(**config.prompt_fn_kwargs) for _ in range(config.sample.eval_batch_size)]
+            )
+            eval_prompts = list(eval_prompts)
+
+        # Initialize generator for reproducibility
+        eval_generator = torch.Generator(device=accelerator.device)
+        eval_generator.manual_seed(config.seed + 1)
+
+        # Sample images using the pipeline
+        with autocast():
+            eval_images, _, _, _ = pipeline_with_logprob(
+                pipeline,
+                prompt=eval_prompts,
+                num_inference_steps=num_steps,
+                guidance_scale=guidance_scale,
+                eta=config.sample.eta,
+                output_type="pt",
+                return_dict=False,
+                generator=eval_generator,
+            )
+
+        # Compute rewards for the generated images
+        eval_rewards, eval_rewards_meta = reward_fn(eval_images, eval_prompts, eval_prompt_metadata)
+        eval_rewards = eval_rewards.cpu().numpy()
+
+        # Prepare images for WandB logging
+        with tempfile.TemporaryDirectory() as tmpdir:
+            wandb_images = []
+            for i, (image, prompt, reward, reward_meta) in enumerate(zip(eval_images, eval_prompts, eval_rewards, eval_rewards_meta)):
+                pil = Image.fromarray((image.cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8))
+                pil = pil.resize((512, 512))
+                image_path = os.path.join(tmpdir, f"{i}.jpg")
+                pil.save(image_path)
+                caption = f"{prompt} | {reward:.2f}"
+                if reward_meta is not None and "output" in reward_meta:
+                    caption += f" | {reward_meta['output']}"
+                wandb_images.append(
+                    wandb.Image(image_path, caption=caption)
+                )
+
+            # Log evaluation metrics and images to WandB
+            accelerator.log({
+                "validation/images": wandb_images,
+                "validation/reward_mean": eval_rewards.mean(),
+                "epoch": epoch
+            }, step=max(global_step - 1,0))  # Log at the end of the training epoch
+
 
     # Train!
     samples_per_epoch = config.sample.batch_size * accelerator.num_processes * config.sample.num_batches_per_epoch
@@ -298,6 +357,10 @@ def main(_):
 
     global_step = 0
     for epoch in range(first_epoch, config.num_epochs):
+
+        if epoch == 0:
+            evaluate(epoch, global_step, pipeline)
+
         #################### SAMPLING ####################
         pipeline.unet.eval()
         samples = []
@@ -493,53 +556,7 @@ def main(_):
         #################### EVALUATION ####################
         # (epoch+1) because model already trained for (epoch+1) epochs
         if (epoch+1)%config.sample.eval_epoch==0:
-            if config.get("eval_prompt_fn") == "fixed":
-                eval_prompts = config.eval_fixed_prompt
-                assert len(eval_prompts) == config.sample.eval_batch_size
-                eval_prompt_metadata = [{}] * config.sample.eval_batch_size
-            else:
-                eval_prompts, eval_prompt_metadata = zip(
-                *[prompt_fn(**config.prompt_fn_kwargs) for _ in range(config.sample.eval_batch_size)])
-                eval_prompts = list(eval_prompts)
-            
-            eval_generator = torch.Generator(device=accelerator.device)
-            eval_generator.manual_seed(config.seed+1)
-
-            # sample
-            with autocast():
-                eval_images, _, _, _ = pipeline_with_logprob(
-                    pipeline,
-                    prompt=eval_prompts,
-                    num_inference_steps=num_steps,
-                    guidance_scale=guidance_scale,
-                    eta=config.sample.eta,
-                    output_type="pt",
-                    return_dict=False,
-                    generator=eval_generator,
-                )
-
-            eval_rewards, eval_rewards_meta = reward_fn(eval_images, eval_prompts, eval_prompt_metadata)
-            eval_rewards = eval_rewards.cpu().numpy()
-
-            # this is a hack to force wandb to log the images as JPEGs instead of PNGs
-            with tempfile.TemporaryDirectory() as tmpdir:
-                wandb_images = []
-                for i, (image, prompt, reward, reward_meta) in enumerate(zip(eval_images, eval_prompts, eval_rewards, eval_rewards_meta)):
-                    pil = Image.fromarray((image.cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8))
-                    pil = pil.resize((512, 512))
-                    pil.save(os.path.join(tmpdir, f"{i}.jpg"))
-                    caption = f"{prompt} | {reward:.2f}"
-                    if reward_meta is not None and "output" in reward_meta:
-                        caption += f" | {reward_meta['output']}"
-                    wandb_images.append(
-                        wandb.Image(os.path.join(tmpdir, f"{i}.jpg"), caption=caption)
-                    )
-                accelerator.log({
-                    "validation/images": wandb_images,
-                    "validation/reward_mean": eval_rewards.mean(),
-                    "epoch": epoch },
-                    step=global_step-1 # log at the end of the training epoch
-                )
+            evaluate(epoch, global_step, pipeline)
 
 if __name__ == "__main__":
     app.run(main)
