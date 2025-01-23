@@ -132,7 +132,7 @@ def main(_):
     wandb_name = f"dpok-{config.name_subfix}" if config.name_subfix else "dpok"
     if accelerator.is_main_process:
         accelerator.init_trackers(
-            project_name="finetune-stable-diffusion",
+            project_name="guide-stable-diffusion",
             config=config.to_dict(),
             init_kwargs={"wandb": {"name": wandb_name, "mode": config.wandb_mode}},
         )

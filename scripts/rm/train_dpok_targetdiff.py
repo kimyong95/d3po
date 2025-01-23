@@ -146,7 +146,7 @@ def main(_):
     wandb_name = f"dpok-data={data_id}-{config.name_subfix}" if config.name_subfix else f"dpok-data={data_id}"
     if accelerator.is_main_process:
         accelerator.init_trackers(
-            project_name="finetune-targetdiff",
+            project_name="guide-targetdiff",
             config=config.to_dict(),
             init_kwargs={"wandb": {"name": wandb_name, "mode": config.wandb_mode}},
         )
