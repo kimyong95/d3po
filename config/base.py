@@ -124,8 +124,7 @@ def get_config():
     config.prompt_fn = "fixed"
     # kwargs to pass to the prompt function.
     config.prompt_fn_kwargs = { }
-    config.fixed_prompt = "A helicopter floating under the ocean."
-    
+    config.fixed_prompt = "A bear riding a red bicycle with his puppy friend sitting on the back, he holding a colourful umbrella and wearing a hat."
 
     ############ Reward Function ############
     # reward function to use. see `rewards.py` for available reward functions.
@@ -134,6 +133,12 @@ def get_config():
     # set config.num_epochs = 1000, sample.num_batches_per_epoch=1, sample.batch_size=8 and sample.eval_batch_size=8
     # config.reward_fn = "gemini"
     config.reward_fn = "gemini_binary"
+    config.reward_prompts = [
+        "A bear riding a bicycle with his puppy friend sitting on the back.",
+        "A bear riding a bicycle with his puppy friend sitting on the back, he holding an umbrella.",
+        "A bear riding a red bicycle with his puppy friend sitting on the back, he holding a colourful umbrella.",
+        "A bear riding a red bicycle with his puppy friend sitting on the back, he holding a colourful umbrella and wearing a hat.",
+    ]
 
     ############ D3PO Specific ############
     config.reward_fn_choice = "gemini_choice"

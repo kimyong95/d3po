@@ -301,7 +301,8 @@ def main(_):
             )
 
         # Compute rewards for the generated images
-        eval_rewards, eval_rewards_meta = reward_fn(eval_images, eval_prompts, eval_prompt_metadata)
+        eval_rewards, eval_rewards_meta = reward_fn(eval_images, [config.reward_prompts[-1]], eval_prompt_metadata)
+        eval_rewards = eval_rewards[-1]
         eval_rewards = eval_rewards.cpu().numpy()
 
         # Prepare images for WandB logging
@@ -393,7 +394,7 @@ def main(_):
             log_probs = torch.stack(log_probs, dim=1)  # (batch_size, num_steps, 1)
             timesteps = pipeline.scheduler.timesteps.repeat(config.sample.batch_size, 1)  # (batch_size, num_steps)
 
-            rewards = reward_fn(images, prompts, prompt_metadata)
+            rewards = reward_fn(images, config.reward_prompts, prompt_metadata)
 
             samples.append(
                 {
@@ -427,10 +428,16 @@ def main(_):
         accelerator.log(
             {
                 "epoch": epoch,
-                "train/reward_mean": rewards.mean(),
+                "train/reward_mean": rewards[-1].mean(),
+                "reward_f0_mean": rewards[0].mean(),
+                "reward_f1_mean": rewards[1].mean(),
+                "reward_f2_mean": rewards[2].mean(),
+                "reward_f3_mean": rewards[3].mean(),
             },
             step=global_step,
         )
+
+        rewards = rewards.mean(0)
 
         # per-prompt mean/std tracking
         if config.per_prompt_stat_tracking:
