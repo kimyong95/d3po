@@ -92,6 +92,32 @@ def gemini_binary():
 
     return _fn
 
+def llama_binary():
+    from utils.rewards import LlamaQuestion
+    llama = LlamaQuestion().to(torch.device("cuda"))
+    query = "Does the prompt '{target_prompt}' accurately describe the image? Answer score=0 (no) or score=1 (yes).\nAnswer in the format: Score=score, Reason=reason."
+    def _fn(images, prompts, metadata):
+
+        n_prompts = len(prompts)
+        n_images = len(images)
+
+        images = VaeImageProcessor.numpy_to_pil(VaeImageProcessor.pt_to_numpy(images))
+        scores_list = []
+        outputs_list = []
+        for i in range(n_prompts):
+            prompt = prompts[i]
+            scores, outputs = llama(images, prompt, query, max_reward=1.0)
+            scores_list.append(scores)
+            outputs_list.append(outputs)
+        
+        scores = torch.stack(scores_list, dim=0)
+        for i in range(n_images):
+            metadata[i]["output"] = [o[i] for o in outputs_list]
+        
+        return scores, metadata
+
+    return _fn
+
 def gemini_choice():
     from utils.rewards import GeminiQuestion
     gemini = GeminiQuestion().to(torch.device("cuda"))

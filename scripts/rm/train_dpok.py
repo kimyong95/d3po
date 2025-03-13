@@ -31,7 +31,7 @@ from huggingface_hub import hf_hub_download
 from safetensors.torch import load_file
 import uuid
 from dotenv import load_dotenv
-
+torch.set_num_threads(2)
 load_dotenv()
 
 tqdm = partial(tqdm.tqdm, dynamic_ncols=True)

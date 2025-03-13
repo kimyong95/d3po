@@ -124,8 +124,7 @@ def get_config():
     config.prompt_fn = "fixed"
     # kwargs to pass to the prompt function.
     config.prompt_fn_kwargs = { }
-    config.fixed_prompt = "A bear riding a red bicycle with his puppy friend sitting on the back, he holding a colourful umbrella and wearing a hat."
-
+    config.fixed_prompt = "A robotic cat and a robotic dog playing with a football on the moon. The cat wearing a hat, and dog wearing a scarf."
     ############ Reward Function ############
     # reward function to use. see `rewards.py` for available reward functions.
     # if the reward_fn is "jpeg_compressibility" or "jpeg_incompressibility", using the default config can reproduce our results.
@@ -134,10 +133,10 @@ def get_config():
     # config.reward_fn = "gemini"
     config.reward_fn = "gemini_binary"
     config.reward_prompts = [
-        "A bear riding a bicycle with his puppy friend sitting on the back.",
-        "A bear riding a bicycle with his puppy friend sitting on the back, he holding an umbrella.",
-        "A bear riding a red bicycle with his puppy friend sitting on the back, he holding a colourful umbrella.",
-        "A bear riding a red bicycle with his puppy friend sitting on the back, he holding a colourful umbrella and wearing a hat.",
+        "They playing with football on the moon.",
+        "A robotic cat and a robotic dog playing with a football on the moon.",
+        "A robotic cat and a robotic dog playing with a football on the moon. The dog wearing a scarf.",
+        "A robotic cat and a robotic dog playing with a football on the moon. The cat wearing a hat, and dog wearing a scarf.",
     ]
 
     ############ D3PO Specific ############
