@@ -69,7 +69,7 @@ def gemini():
 def gemini_binary():
     from utils.rewards import GeminiQuestion
     gemini = GeminiQuestion().to(torch.device("cuda"))
-    query = "Does the prompt '{target_prompt}' accurately describe the image? Answer score=0 (no) or score=1 (yes).\nAnswer in the format: Score=score, Reason=reason."
+    query = "Does the image accurately aligned with the prompt '{target_prompt}', why? Answer score=0 (no) or score=1 (yes).\nAnswer in the format: Reason=reason, Score=score."
     def _fn(images, prompts, metadata):
 
         n_prompts = len(prompts)
@@ -95,7 +95,7 @@ def gemini_binary():
 def llama_binary():
     from utils.rewards import LlamaQuestion
     llama = LlamaQuestion().to(torch.device("cuda"))
-    query = "Does the prompt '{target_prompt}' accurately describe the image? Answer score=0 (no) or score=1 (yes).\nAnswer in the format: Score=score, Reason=reason."
+    query = "Does the image accurately aligned with the prompt '{target_prompt}', why? Answer score=0 (no) or score=1 (yes).\nAnswer in the format: Reason=reason, Score=score."
     def _fn(images, prompts, metadata):
 
         n_prompts = len(prompts)

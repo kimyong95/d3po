@@ -425,15 +425,14 @@ def main(_):
         rewards = accelerator.gather(samples["rewards"]).cpu().numpy()
 
         # log rewards and images
+        log_data = {
+            "epoch": epoch,
+            "train/reward_mean": rewards[-1].mean(),
+        }
+        for i, r in enumerate(rewards):
+            log_data[f"reward_f{i}_mean"] = r.mean()
         accelerator.log(
-            {
-                "epoch": epoch,
-                "train/reward_mean": rewards[-1].mean(),
-                "reward_f0_mean": rewards[0].mean(),
-                "reward_f1_mean": rewards[1].mean(),
-                "reward_f2_mean": rewards[2].mean(),
-                "reward_f3_mean": rewards[3].mean(),
-            },
+            log_data,
             step=global_step,
         )
 

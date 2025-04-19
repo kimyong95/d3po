@@ -46,7 +46,7 @@ def get_config():
     # eval epoch
     sample.eval_epoch = 5
     # batch size (per GPU!) to use for sampling.
-    sample.batch_size = 32
+    sample.batch_size = 16
     # number of batches to sample per epoch.
     sample.num_batches_per_epoch = 1
     # the total number of samples per epoch is `num_batches_per_epoch * batch_size * num_gpus`.
@@ -133,10 +133,10 @@ def get_config():
     # config.reward_fn = "gemini"
     config.reward_fn = "gemini_binary"
     config.reward_prompts = [
-        "They playing with football on the moon.",
-        "A robotic cat and a robotic dog playing with a football on the moon.",
-        "A robotic cat and a robotic dog playing with a football on the moon. The dog wearing a scarf.",
-        "A robotic cat and a robotic dog playing with a football on the moon. The cat wearing a hat, and dog wearing a scarf.",
+        "A cat and a dog on the moon.",
+        "A robotic cat and a fluffy dog on the moon.",
+        "A robotic cat and a fluffy dog playing with a football on the moon.",
+        "A robotic cat and a fluffy dog playing with a football on the moon. The fluffy dog wearing a scarf, but the robotic cat is not.",
     ]
 
     ############ D3PO Specific ############
