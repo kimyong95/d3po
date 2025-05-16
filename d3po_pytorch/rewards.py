@@ -71,23 +71,13 @@ def gemini_binary():
     gemini = GeminiQuestion().to(torch.device("cuda"))
     query = "Does the image accurately aligned with the prompt '{target_prompt}', why? Answer score=0 (no) or score=1 (yes).\nAnswer in the format: Reason=reason, Score=score."
     def _fn(images, prompts, metadata):
-
-        n_prompts = len(prompts)
-        n_images = len(images)
+        assert all(x == prompts[0] for x in prompts)
+        prompt = prompts[0]
 
         images = VaeImageProcessor.numpy_to_pil(VaeImageProcessor.pt_to_numpy(images))
-        scores_list = []
-        outputs_list = []
-        for i in range(n_prompts):
-            prompt = prompts[i]
-            scores, outputs = gemini(images, prompt, query, max_reward=1.0)
-            scores_list.append(scores)
-            outputs_list.append(outputs)
-        
-        scores = torch.stack(scores_list, dim=0)
-        for i in range(n_images):
-            metadata[i]["output"] = [o[i] for o in outputs_list]
-        
+        scores, outputs = gemini(images, prompt, query, max_reward=1.0)
+        for i, output in enumerate(outputs):
+            metadata[i]["output"] = output
         return scores, metadata
 
     return _fn
@@ -156,10 +146,12 @@ def gemini_choice():
 
     return _fn
 
-from related_works.targetdiff.utils import misc, reconstruct, transforms
-import related_works.targetdiff.utils.transforms as trans
-from rdkit import Chem
+
 def reconstruct_molecule(pos, v):
+    from related_works.targetdiff.utils import misc, reconstruct, transforms
+    import related_works.targetdiff.utils.transforms as trans
+    from rdkit import Chem
+
     # reconstruction
     pred_atom_type = transforms.get_atomic_number_from_index(v, mode="add_aromatic")
     try:
@@ -171,6 +163,8 @@ def reconstruct_molecule(pos, v):
     return mol
 
 async def get_score(pos, v, receptor_info):
+    
+    from related_works.targetdiff.utils.evaluation.docking_vina import VinaDockingTask
 
     # Tang S, Chen R, Lin M, Lin Q, Zhu Y, Ding J, Hu H, Ling M, Wu J. Accelerating AutoDock Vina with GPUs. Molecules. 2022 May 9;27(9):3041. doi: 10.3390/molecules27093041. PMID: 35566391; PMCID: PMC9103882.
     # cite: The AutoDock Vina score for drug-like compounds can reach as low as -11.6 kcal/mol.
@@ -202,7 +196,7 @@ async def get_scores_async(pos_list, v_list, receptor_info):
 
 
 import asyncio
-from related_works.targetdiff.utils.evaluation.docking_vina import VinaDockingTask
+
 def vina():
 
     def _fn(pos_v_zip, receptor_info, metadata):
